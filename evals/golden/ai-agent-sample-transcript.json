@@ -1,0 +1,63 @@
+{
+  "episode": {
+    "title": "The Practical Future of AI Agents",
+    "description": "A sample transcript fixture for M0 pipeline testing.",
+    "publishedAt": "2026-04-20T08:00:00.000Z",
+    "durationSec": 920,
+    "audioUrl": "https://example.com/audio/ai-agents.mp3",
+    "pageUrl": "https://example.com/podcasts/practical-future-ai-agents",
+    "language": "en"
+  },
+  "transcript": [
+    {
+      "startSec": 0,
+      "endSec": 96,
+      "speaker": "Host",
+      "confidence": 0.94,
+      "text": "Today we are talking about AI agent workflow commercialization. The important shift is that teams do not buy intelligence in the abstract. They buy fewer handoffs, fewer tabs, and less operational drag."
+    },
+    {
+      "startSec": 96,
+      "endSec": 210,
+      "speaker": "Guest",
+      "confidence": 0.92,
+      "text": "The first successful AI agent products will probably look boring. They will sit inside sales operations, support queues, finance reconciliation, and developer tooling. The workflow matters more than the model demo."
+    },
+    {
+      "startSec": 210,
+      "endSec": 330,
+      "speaker": "Guest",
+      "confidence": 0.93,
+      "text": "MCP is interesting because it gives agent workflows a common way to connect tools and context. But the commercial value still comes from owning a repeated job, not from having a long list of integrations."
+    },
+    {
+      "startSec": 330,
+      "endSec": 450,
+      "speaker": "Host",
+      "confidence": 0.91,
+      "text": "Claude Code and other coding agents show the pattern. Developers are not paying for a chatbot. They are paying for a workflow where the agent can inspect a repo, propose a patch, run checks, and close the loop."
+    },
+    {
+      "startSec": 450,
+      "endSec": 590,
+      "speaker": "Guest",
+      "confidence": 0.9,
+      "text": "The risk is overclaiming autonomy. A reliable agent workflow should expose evidence, actions, and rollback points. For most enterprise users, trust is created by verifiable intermediate steps."
+    },
+    {
+      "startSec": 590,
+      "endSec": 720,
+      "speaker": "Host",
+      "confidence": 0.92,
+      "text": "That is why workflow automation is a better starting point than a general assistant. You can measure time saved, errors avoided, and whether the operator had to intervene."
+    },
+    {
+      "startSec": 720,
+      "endSec": 920,
+      "speaker": "Guest",
+      "confidence": 0.91,
+      "text": "OpenAI, Anthropic, and the broader ecosystem will keep improving models, but distribution may be won by products that own the system of record or the daily work surface."
+    }
+  ]
+}
+
