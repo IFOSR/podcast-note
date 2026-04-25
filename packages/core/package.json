@@ -1,0 +1,15 @@
+{
+  "name": "@podcast-note/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./types": "./src/types.ts",
+    "./dedupe": "./src/dedupe.ts",
+    "./scoring": "./src/scoring.ts",
+    "./segmenting": "./src/segmenting.ts",
+    "./groundedness": "./src/groundedness.ts",
+    "./format": "./src/format.ts"
+  }
+}
+
