@@ -13,7 +13,7 @@ Transcript fixture -> semantic segments -> episode summary -> watch-specific ins
 - Root monorepo scaffold with Bun scripts.
 - `packages/core`: domain types, dedupe, metadata scoring, segmenting, groundedness, formatting.
 - `packages/connectors`: RSS and manual URL connector skeletons.
-- `packages/ai`: provider interfaces and deterministic mock provider.
+- `packages/ai`: provider interfaces, deterministic mock provider for demos, Codex non-interactive insight provider for real summary/insight extraction, and Volcengine ASR provider for transcription.
 - `packages/db`: initial Postgres migration.
 - `apps/worker`: CLI and M0 transcript processing pipeline.
 - `apps/web`: placeholder for M1 Web App.
@@ -29,16 +29,15 @@ Expected behavior:
 
 - Reads `evals/golden/ai-agent-sample-transcript.json`.
 - Builds semantic segments.
-- Generates a mock episode summary.
+- Generates a mock episode summary for the demo command.
 - Extracts Watch-specific insights.
 - Filters insights through deterministic groundedness checks.
 - Prints a Markdown report.
 
 ## Next M0 Tasks
 
-1. Replace fixture-only input with RSS/manual URL processing.
+1. Promote `process-sources` from local file output to persisted workflow.
 2. Add persistent repositories for Postgres.
 3. Add object storage adapter for transcript JSON and audio cache.
-4. Add a real transcription provider adapter behind the existing interface.
+4. Add production-grade source connectors beyond RSS/manual public pages.
 5. Add golden eval script for precision, groundedness, and timestamp accuracy.
-

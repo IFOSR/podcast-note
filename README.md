@@ -6,7 +6,7 @@ The current implementation is the M0 scaffold:
 
 - Core domain types and utility functions.
 - RSS and manual URL connector skeletons.
-- AI provider interfaces with a deterministic mock provider.
+- AI provider interfaces with a deterministic mock provider for demos, a Codex non-interactive insight provider for real summary/insight extraction, and a Volcengine ASR provider for transcription.
 - Worker CLI that can process a transcript fixture into grounded insights.
 - Initial Postgres migration aligned with the PRD and technical design.
 
@@ -27,5 +27,25 @@ Or process a transcript file:
 bun apps/worker/src/cli.ts process-transcript evals/golden/ai-agent-sample-transcript.json
 ```
 
-The demo uses a mock AI provider so it can run without external APIs.
+`demo` uses a mock AI provider so it can run without external APIs. `process-transcript` uses `codex exec` non-interactive mode for real text analysis.
 
+## Real Local Flow
+
+Create local inputs from the examples:
+
+```bash
+cp inputs/watch.example.json inputs/watch.json
+cp inputs/sources.example.json inputs/sources.json
+```
+
+Then run:
+
+```bash
+bun apps/worker/src/cli.ts process-sources
+```
+
+The real flow reads user-friendly topic/source inputs, resolves public audio URLs, transcribes with Volcengine ASR, analyzes text with `codex exec`, and writes per-episode files under `outputs/<episode-slug>/`:
+
+- `transcript.json`
+- `report.md`
+- `result.json`

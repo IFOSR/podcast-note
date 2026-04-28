@@ -1,4 +1,4 @@
-import { mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/index.ts";
+import { createCodexInsightProvider, createVolcengineTranscriptProvider, mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/index.ts";
 import { connectorFor, parseRss } from "../../../packages/connectors/src/index.ts";
 import { episodeDedupeKey } from "../../../packages/core/src/dedupe.ts";
 import { formatTimestamp } from "../../../packages/core/src/format.ts";
@@ -72,6 +72,7 @@ if (!connectorFor("https://example.com/feed.xml")) throw new Error("Connector re
 if (!episodeDedupeKey({ ...episode, title: episode.title })) throw new Error("Dedupe key failed.");
 if (!formatTimestamp(90).includes("1:30")) throw new Error("Timestamp formatting failed.");
 if (!mockInsightProvider.name || !mockTranscriptProvider.name) throw new Error("AI providers failed to import.");
+if (typeof createCodexInsightProvider !== "function") throw new Error("Codex insight provider failed to import.");
+if (typeof createVolcengineTranscriptProvider !== "function") throw new Error("Volcengine transcript provider failed to import.");
 
 console.log("Import check passed.");
-

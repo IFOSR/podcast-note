@@ -1,4 +1,4 @@
-import { mockInsightProvider } from "../../../packages/ai/src/index.ts";
+import { mockInsightProvider, type InsightProvider } from "../../../packages/ai/src/index.ts";
 import { formatTimestamp, stableId } from "../../../packages/core/src/format.ts";
 import { publishableInsight } from "../../../packages/core/src/groundedness.ts";
 import { buildSemanticSegments } from "../../../packages/core/src/segmenting.ts";
@@ -11,14 +11,17 @@ export type ProcessTranscriptInput = {
   transcriptSegments: TranscriptSegment[];
 };
 
-export async function processTranscriptFixture(input: ProcessTranscriptInput): Promise<EpisodeProcessingResult> {
+export async function processTranscript(
+  input: ProcessTranscriptInput,
+  insightProvider: InsightProvider
+): Promise<EpisodeProcessingResult> {
   const segments = buildSemanticSegments(input.transcriptSegments);
-  const summary = await mockInsightProvider.summarizeEpisode({
+  const summary = await insightProvider.summarizeEpisode({
     episode: input.episode,
     segments,
     outputLanguage: input.watch.outputLanguage
   });
-  const draftInsights = await mockInsightProvider.extractWatchInsights({
+  const draftInsights = await insightProvider.extractWatchInsights({
     workspaceId: input.workspaceId,
     episode: input.episode,
     watch: input.watch,
@@ -36,6 +39,10 @@ export async function processTranscriptFixture(input: ProcessTranscriptInput): P
     segments,
     insights
   };
+}
+
+export async function processTranscriptFixture(input: ProcessTranscriptInput): Promise<EpisodeProcessingResult> {
+  return processTranscript(input, mockInsightProvider);
 }
 
 export function markdownReport(result: EpisodeProcessingResult, watch: Watch): string {
@@ -123,4 +130,3 @@ function renderInsight(insight: Insight): string {
     `  Status: ${insight.status}`
   ].join("\n");
 }
-
