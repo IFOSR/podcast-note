@@ -86,6 +86,7 @@ bun run check:inbox-feedback-detail
 bun run check:auth-usage
 bun run check:web-m15
 bun run check:m1-run-once
+bun run check:start-script
 ```
 
 `check:workspace` covers the first M1 foundation slice: user upsert, idempotent personal workspace creation, and listing Watches scoped to that workspace.
@@ -109,6 +110,40 @@ bun run check:m1-run-once
 `check:web-m15` covers the M1.5 web product slice: creating a local web session, managing Watches through workspace-scoped server helpers, hydrating Inbox and Episode detail views, saving insight feedback, and recording view/playback usage events.
 
 `check:m1-run-once` covers the M1.5 worker run-once slice: planning due Watch polling jobs, discovering RSS episodes, metadata-filtering and queueing relevant episodes, processing the queue, and publishing insights in one deterministic worker call.
+
+`check:start-script` covers the local trial script: `start`, `status`, `restart`, `run-once`, and `stop` process-management behavior against an isolated preview server.
+
+## Local Trial Script
+
+Start the product preview from the repository root:
+
+```bash
+scripts/podcast-note start
+```
+
+Then open:
+
+```text
+http://127.0.0.1:3000
+```
+
+Manage the local process with:
+
+```bash
+scripts/podcast-note status
+scripts/podcast-note run-once
+scripts/podcast-note restart
+scripts/podcast-note logs
+scripts/podcast-note stop
+```
+
+Useful options:
+
+```bash
+scripts/podcast-note start --port 3001 --db storage/podcast-note.sqlite
+```
+
+The preview server seeds a local user/session and a default Watch if the SQLite database is empty, then shows Watches, Inbox items, a health endpoint, and a button to trigger the M1 run-once worker loop.
 
 Run the M1.5 worker end-to-end command against a local database with:
 

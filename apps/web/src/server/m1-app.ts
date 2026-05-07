@@ -4,9 +4,9 @@ import type {
   InboxItem,
   InsightFeedback,
   InsightFeedbackAction
-} from "../../../packages/db/src/repositories.ts";
-import type { OutputLanguage, User, Watch, WatchType } from "../../../packages/core/src/types.ts";
-import type { createRepositories } from "../../../packages/db/src/repositories.ts";
+} from "../../../../packages/db/src/repositories.ts";
+import type { OutputLanguage, User, Watch, WatchType } from "../../../../packages/core/src/types.ts";
+import type { createRepositories } from "../../../../packages/db/src/repositories.ts";
 
 type Repositories = ReturnType<typeof createRepositories>;
 

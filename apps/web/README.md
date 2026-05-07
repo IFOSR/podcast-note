@@ -11,6 +11,7 @@ M1.5 adds the first product-facing Web App slice for Podcast Note. The code is i
 - Inbox hydration for published insights with episode/watch metadata.
 - Episode detail hydration with player metadata, transcript, summary and feedback state.
 - Feedback and usage-event recording for save/irrelevant/wrong/archive, inbox/detail views, and playback.
+- A local Bun HTTP preview server in `src/server/preview.ts`, launched by `scripts/podcast-note`, for immediate hands-on trial without a full Next.js runtime.
 
 ## Verification
 
@@ -21,6 +22,16 @@ bun run check:web-m15
 ```
 
 The check seeds an isolated SQLite database, creates a local session, creates/pauses a Watch, hydrates inbox and episode detail, records feedback and playback usage, then asserts workspace-scoped results.
+
+## Local preview
+
+From the repository root:
+
+```bash
+scripts/podcast-note start
+```
+
+Open `http://127.0.0.1:3000`, then manage the process with `scripts/podcast-note status`, `scripts/podcast-note restart`, `scripts/podcast-note run-once`, `scripts/podcast-note logs`, and `scripts/podcast-note stop`.
 
 ## Next product step
 
