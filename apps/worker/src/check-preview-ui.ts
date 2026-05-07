@@ -43,6 +43,11 @@ try {
   assertIncludes(home, "示例数据", "空 Inbox 时必须提供可一键生成的示例数据入口。未找到“示例数据”。");
   assertIncludes(home, "保存", "Insight 卡片必须提供保存反馈按钮。未找到“保存”。");
   assertIncludes(home, "没用", "Insight 卡片必须提供负反馈按钮。未找到“没用”。");
+  assertNotIncludes(home, "<h2>CLI</h2>", "普通用户试用页不应直接暴露 CLI 区块，容易误以为页面里出现 terminal。");
+  assertNotIncludes(home, "<pre>scripts/podcast-note", "普通用户试用页不应显示大块终端命令，避免遮挡正文和造成困惑。");
+  assertNotIncludes(home, "运行一次等价于", "运行一次说明不应以 terminal 命令作为用户解释，避免用户困惑。");
+  assertIncludes(home, "状态与辅助命令", "CLI 信息应降级为折叠的辅助说明，默认不干扰主流程。");
+  assertIncludes(home, "页面操作不需要打开终端", "辅助说明需要明确普通试用不需要终端。");
   assertNotIncludes(home, "No insights yet. Run the worker once after configuring real sources.", "首页不能再显示旧的不可操作空态文案。");
 
   const createResponse = postForm(`${url}/api/watches`, {

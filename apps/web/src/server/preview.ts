@@ -241,7 +241,12 @@ function renderHome(context: SessionContext, notice?: string | null): string {
     .score { color: #1d4ed8; font-weight: 800; }
     .meta { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
     .quote { border-left: 4px solid #93c5fd; padding: 10px 12px; background: #f8fbff; border-radius: 8px; color: #344054; }
-    code, pre { background: #101828; color: #f9fafb; border-radius: 12px; padding: 12px; overflow: auto; }
+    code { background: #eef2ff; color: #344054; border-radius: 6px; padding: 1px 5px; }
+    pre { background: #101828; color: #f9fafb; border-radius: 12px; padding: 12px; overflow: auto; }
+    details.helper { margin-top: 16px; border: 1px dashed #d0d5dd; background: #fcfcfd; color: #475467; }
+    details.helper summary { cursor: pointer; font-weight: 800; color: #344054; }
+    details.helper ul { margin: 10px 0 0; padding-left: 20px; }
+    details.helper code { background: #f2f4f7; color: #344054; }
     a { color: #1d4ed8; }
     @media (max-width: 820px) { header, .grid, .row { grid-template-columns: 1fr; display: grid; } }
   </style>
@@ -289,7 +294,7 @@ function renderHome(context: SessionContext, notice?: string | null): string {
           <form method="post" action="/api/run-once"><button type="submit">运行一次</button></form>
           <form method="post" action="/api/demo"><button class="secondary" type="submit">生成示例数据</button></form>
         </div>
-        <p class="muted small">运行一次等价于 <code>scripts/podcast-note run-once</code>。如果还没配置真实 RSS，先点“生成示例数据”也能完整试用 Inbox。</p>
+        <p class="muted small">“运行一次”会用当前 Watch 去执行一轮真实处理；如果只是想先看看效果，点“生成示例数据”即可，不需要打开终端。</p>
       </section>
     </aside>
     <section class="card">
@@ -297,12 +302,15 @@ function renderHome(context: SessionContext, notice?: string | null): string {
       ${renderInbox(data.inbox)}
     </section>
   </div>
-  <section class="card" style="margin-top:16px">
-    <h2>CLI</h2>
-    <pre>scripts/podcast-note status
-scripts/podcast-note run-once
-scripts/podcast-note stop</pre>
-  </section>
+  <details class="card helper">
+    <summary>状态与辅助命令（可选）</summary>
+    <p class="small">页面操作不需要打开终端。下面只是给开发/排障时使用：查看服务状态、手动跑一次、停止本地服务。</p>
+    <ul class="small">
+      <li><code>scripts/podcast-note status</code>：查看本地服务是否运行。</li>
+      <li><code>scripts/podcast-note run-once</code>：和页面里的“运行一次”作用相同。</li>
+      <li><code>scripts/podcast-note stop</code>：停止本地试用服务。</li>
+    </ul>
+  </details>
 </main>
 </body>
 </html>`;
