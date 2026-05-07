@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createCodexInsightProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
 import { connectorFor } from "../../../packages/connectors/src/index.ts";
 import type { Episode } from "../../../packages/core/src/types.ts";
+import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
 import { demoWatch, episodeFromFixture, markdownReport, processTranscript, processTranscriptFixture, type TranscriptFixture } from "./pipeline.ts";
 import { processSources } from "./process-sources.ts";
 
@@ -66,16 +67,80 @@ if (command === "demo") {
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
+} else if (command === "query") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const entity = process.argv[3] ?? "help";
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const limit = numberFlagValue("--limit") ?? 20;
+    const format = flagValue("--format") ?? "table";
+    let rows: unknown;
+
+    if (entity === "episodes") {
+      rows = repos.listProcessedEpisodes({ limit });
+    } else if (entity === "runs") {
+      rows = repos.listProcessingRuns({ limit });
+    } else if (entity === "insights") {
+      rows = repos.listInsights({
+        watchId: flagValue("--watch-id"),
+        episodeId: flagValue("--episode-id"),
+        limit
+      });
+    } else {
+      fail("Usage: bun apps/worker/src/cli.ts query <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 20] [--format json] [--watch-id id] [--episode-id id]");
+    }
+
+    printRows(rows, format);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "export") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const entity = process.argv[3] ?? "help";
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const limit = numberFlagValue("--limit") ?? 100;
+    const outputPath = flagValue("--output");
+    let rows: unknown;
+
+    if (entity === "episodes") {
+      rows = repos.listProcessedEpisodes({ limit });
+    } else if (entity === "runs") {
+      rows = repos.listProcessingRuns({ limit });
+    } else if (entity === "insights") {
+      rows = repos.listInsights({
+        watchId: flagValue("--watch-id"),
+        episodeId: flagValue("--episode-id"),
+        limit
+      });
+    } else {
+      fail("Usage: bun apps/worker/src/cli.ts export <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json] [--watch-id id] [--episode-id id]");
+    }
+
+    const json = `${JSON.stringify(rows, null, 2)}\n`;
+    if (outputPath) {
+      await writeFile(resolve(outputPath), json, "utf8");
+      console.log(`Exported ${Array.isArray(rows) ? rows.length : 0} ${entity} row(s) to ${outputPath}.`);
+    } else {
+      console.log(json);
+    }
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 } else if (command === "process-sources") {
   try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const db = openPodcastNoteDb(dbPath);
     const results = await processSources({
       options: readProcessSourcesOptions(),
       transcriptProvider: volcengineTranscriptProviderOrFail(),
-      insightProvider: codexInsightProviderOrFail()
+      insightProvider: codexInsightProviderOrFail(),
+      repositories: createRepositories(db)
     });
     console.log(
       [
         `Processed ${results.length} episode${results.length === 1 ? "" : "s"}.`,
+        `SQLite: ${dbPath}`,
         ...results.map((result) => `- ${result.episodeTitle}: ${result.outputDir}`)
       ].join("\n")
     );
@@ -92,7 +157,9 @@ if (command === "demo") {
       "  process-transcript <fixture.json>",
       "  resolve-audio-url <public-audio-or-episode-url>",
       "  transcribe-url <public-audio-or-episode-url>",
-      "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs]"
+      "  query <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 20] [--format json] [--watch-id id] [--episode-id id]",
+      "  export <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json] [--watch-id id] [--episode-id id]",
+      "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs] [--db storage/podcast-note.sqlite]"
     ].join("\n")
   );
 }
@@ -104,6 +171,28 @@ async function loadFixture(path: string): Promise<TranscriptFixture> {
     throw new Error(`Invalid transcript fixture: ${path}`);
   }
   return parsed;
+}
+
+function printRows(rows: unknown, format: string): void {
+  if (format === "json") {
+    console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
+  if (!Array.isArray(rows)) {
+    console.log(String(rows));
+    return;
+  }
+  if (rows.length === 0) {
+    console.log("No rows.");
+    return;
+  }
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const id = String(row["id"] ?? "");
+    const title = row["title"] ?? row["claim"] ?? row["status"] ?? "";
+    const status = row["status"] ? ` status=${row["status"]}` : "";
+    const count = row["episodeCount"] !== undefined ? ` episodes=${row["episodeCount"]}` : "";
+    console.log(`- ${id}${status}${count} ${String(title).slice(0, 140)}`.trim());
+  }
 }
 
 function fail(message: string): never {

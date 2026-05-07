@@ -1,0 +1,40 @@
+import { connectorFor, connectors, listenNotesConnector } from "../../../packages/connectors/src/index.ts";
+
+const routes = [
+  ["https://example.com/feed.xml", "rss"],
+  ["listennotes:podcast-fixture", "listennotes"],
+  ["https://podcasts.apple.com/us/podcast/example-show/id123456789", "apple"],
+  ["https://open.spotify.com/episode/0abc123", "spotify"],
+  ["https://www.youtube.com/watch?v=abc123", "youtube"],
+  ["https://youtu.be/abc123", "youtube"],
+  ["https://www.xiaoyuzhoufm.com/episode/fixture", "xiaoyuzhou"],
+  ["https://example.com/article", "manual"]
+] as const;
+
+for (const [input, expected] of routes) {
+  const actual = connectorFor(input).type;
+  if (actual !== expected) {
+    throw new Error(`Expected ${input} to route to ${expected}, got ${actual}.`);
+  }
+}
+
+const orderedTypes = connectors.map((connector) => connector.type);
+if (orderedTypes.at(-1) !== "manual") throw new Error("Manual connector must remain the final fallback.");
+if (orderedTypes.indexOf("manual") < orderedTypes.indexOf("apple")) throw new Error("Platform connectors must precede manual fallback.");
+if (orderedTypes.indexOf("listennotes") < 0) throw new Error("Listen Notes connector is not registered.");
+
+const originalKey = process.env["LISTEN_NOTES_API_KEY"];
+delete process.env["LISTEN_NOTES_API_KEY"];
+try {
+  const source = await listenNotesConnector.resolveSource("listennotes:podcast-fixture");
+  if (source.type !== "listennotes") throw new Error("Listen Notes source returned the wrong type.");
+  if (source.externalId !== "podcast-fixture") throw new Error("Listen Notes metadata-only source did not preserve id.");
+  if (source.metadata?.["mode"] !== "metadata-only") throw new Error("Listen Notes no-key mode should be metadata-only.");
+
+  const episode = await listenNotesConnector.resolveEpisode("listennotes:episode-fixture");
+  if (episode.externalId !== "episode-fixture") throw new Error("Listen Notes metadata-only episode did not preserve id.");
+} finally {
+  if (originalKey) process.env["LISTEN_NOTES_API_KEY"] = originalKey;
+}
+
+console.log("Connector registry check passed.");

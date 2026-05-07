@@ -5,6 +5,7 @@ import { formatTimestamp } from "../../../packages/core/src/format.ts";
 import { checkGroundedness } from "../../../packages/core/src/groundedness.ts";
 import { scoreEpisodeMetadata } from "../../../packages/core/src/scoring.ts";
 import { buildSemanticSegments } from "../../../packages/core/src/segmenting.ts";
+import { createLocalObjectStorage } from "../../../packages/storage/src/index.ts";
 import { demoWatch } from "./pipeline.ts";
 
 const rss = `<?xml version="1.0"?>
@@ -74,5 +75,6 @@ if (!formatTimestamp(90).includes("1:30")) throw new Error("Timestamp formatting
 if (!mockInsightProvider.name || !mockTranscriptProvider.name) throw new Error("AI providers failed to import.");
 if (typeof createCodexInsightProvider !== "function") throw new Error("Codex insight provider failed to import.");
 if (typeof createVolcengineTranscriptProvider !== "function") throw new Error("Volcengine transcript provider failed to import.");
+if (typeof createLocalObjectStorage !== "function") throw new Error("Object storage exports failed to import.");
 
 console.log("Import check passed.");

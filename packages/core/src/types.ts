@@ -7,6 +7,20 @@ export type SourceType =
   | "youtube"
   | "manual";
 
+export type User = {
+  id: string;
+  email?: string;
+  name?: string;
+  timezone: string;
+};
+
+export type Workspace = {
+  id: string;
+  ownerUserId: string;
+  name: string;
+  type: "personal";
+};
+
 export type WatchType = "topic" | "podcast" | "entity" | "mixed";
 export type OutputLanguage = "zh-CN" | "en" | "source";
 
@@ -23,6 +37,7 @@ export type Watch = {
   minRelevanceScore: number;
   frequency: "realtime" | "daily" | "weekly";
   backfillDays: number;
+  enabled: boolean;
 };
 
 export type Source = {

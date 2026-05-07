@@ -7,7 +7,22 @@
   "scripts": {
     "m0:demo": "bun apps/worker/src/cli.ts demo",
     "m0:process-transcript": "bun apps/worker/src/cli.ts process-transcript",
-    "check:imports": "bun apps/worker/src/check-imports.ts"
+    "check:imports": "bun apps/worker/src/check-imports.ts",
+    "check:sqlite": "bun apps/worker/src/check-sqlite.ts",
+    "check:query-export": "bun apps/worker/src/check-query-export.ts",
+    "check:skip-resume": "bun apps/worker/src/check-skip-resume.ts",
+    "check:object-storage": "bun apps/worker/src/check-object-storage.ts",
+    "check:connectors": "bun apps/worker/src/check-connectors.ts",
+    "check:golden-eval": "bun apps/worker/src/check-golden-eval.ts",
+    "check:workspace": "bun apps/worker/src/check-workspace.ts",
+    "check:watch-crud": "bun apps/worker/src/check-watch-crud.ts",
+    "check:watch-scheduler": "bun apps/worker/src/check-watch-scheduler.ts",
+    "check:rss-polling": "bun apps/worker/src/check-rss-polling.ts",
+    "check:episode-processing-queue": "bun apps/worker/src/check-episode-processing-queue.ts",
+    "check:metadata-relevance": "bun apps/worker/src/check-metadata-relevance.ts",
+    "check:daily-brief": "bun apps/worker/src/check-daily-brief.ts",
+    "check:inbox-feedback-detail": "bun apps/worker/src/check-inbox-feedback-detail.ts",
+    "check:auth-usage": "bun apps/worker/src/check-auth-usage.ts"
   },
   "workspaces": [
     "apps/*",

@@ -1195,6 +1195,71 @@ M0-12 golden dataset + first eval script
 
 目标：用户配置一次 Watch 后，系统自动监听、处理和发送邮件。
 
+落地顺序建议：先补 M1 的身份/工作区数据底座，再做 Watch CRUD 和 Scheduler。原因是自动触发后的所有资源都必须能回答“属于哪个用户/工作区”。
+
+已落地的首个 M1 foundation slice：
+
+- `users` 表：记录用户身份、邮箱、昵称与 timezone。
+- `workspaces` 表：支持每个用户一个 idempotent personal workspace。
+- `watches.workspace_id` 通过外键绑定 workspace。
+- Repository 新增 `upsertUser`、`getUser`、`ensurePersonalWorkspaceForUser`、`getWorkspace`、`listWatchesForWorkspace`。
+- `bun run check:workspace` 验证首次登录/创建 personal workspace/按 workspace 列 Watch 的闭环。
+
+已落地的 M1 Watch CRUD slice：
+
+- `watches.enabled` 字段用于暂停/恢复 Watch，默认为启用。
+- Repository 新增 `createWatchForWorkspace`、`getWatchForWorkspace`、`updateWatchForWorkspace`、`deleteWatchForWorkspace`。
+- 所有新增 Watch CRUD 方法都以 `workspaceId` 作为作用域，避免跨 workspace 读取或修改。
+- `bun run check:watch-crud` 验证创建、读取、更新、禁用、列表、跨 workspace 隔离和删除闭环。
+
+已落地的 M1 Scheduler 前置 slice：
+
+- `watch_polls` 表记录每次 Watch polling 的检查时间、状态、候选数量、入队数量和错误信息。
+- Repository 新增 `listEnabledWatchesForWorkspace`、`recordWatchPoll`、`getLatestWatchPoll`、`listDueWatches`、`planPollingJobs`。
+- Due 计算规则：禁用 Watch 不进入调度；从未 poll 过的 Watch 使用 `backfillDays` 生成回溯窗口；已 poll 过的 Watch 按 `frequency` 判断是否到期，并从上次 poll 时间继续。
+- `bun run check:watch-scheduler` 验证 enabled Watch 查询、poll history、daily/realtime/weekly 到期判断、30/45 天 backfill 窗口和 polling job 输入。
+
+已落地的 M1 RSS polling slice：
+
+- Worker 新增 `runPollingJob`，接收 `planPollingJobs` 产出的 job 输入，并使用 connector 解析 RSS source 与按 `since` 拉取候选 episode。
+- polling 写入复用现有 `sources` / `episodes` 表；source id 使用 `src:<type>:<url>` 稳定规则，episode id 使用 `episodeDedupeKey` 稳定规则。
+- 同一轮候选先按 dedupe key 去重；已存在 episode 会更新元数据但不计入新增 queued 数，保证重复 polling 幂等。
+- 成功时 `recordWatchPoll` 记录 `candidateCount` / `queuedCount`；失败时记录 failed poll 与错误信息，便于 scheduler 下次按 poll history 继续判断。
+- `bun run check:rss-polling` 验证 polling job since 透传、候选发现、批内去重、跨轮幂等、episode/source 入库与 poll 结果记录。
+
+已落地的 M1 episode processing queue slice：
+
+- `episode_processing_jobs` 表记录从 Watch/RSS discovery 触发的 episode 处理任务，带 workspace/watch/episode/source、status、attempts、relevance score/reason、processing_run_id 和错误信息。
+- Repository 新增 `enqueueEpisodeProcessingJob`、`getEpisodeProcessingJob`、`listQueuedEpisodeProcessingJobs`、`claimEpisodeProcessingJob`、`attachProcessingRunToJob`、`completeEpisodeProcessingJob`、`failEpisodeProcessingJob`。
+- 入队按 `(workspace_id, watch_id, episode_id)` 幂等；已 completed/running 的任务不会被重复 poll 重置，queued/failed 可重新排队。
+- `bun run check:episode-processing-queue` 验证入队幂等、claim、processing run 绑定、完成/失败状态和 workspace scoped 队列读取。
+
+已落地的 M1 metadata relevance scoring slice：
+
+- Worker 新增轻量 `scoreEpisodeMetadataForWatch` / `filterRelevantEpisodesForWatch`，基于 Watch query、include terms、exclude terms、title/description/source metadata 计算 score 与 reason。
+- 低于 `minRelevanceScore` 或命中 exclude term 的候选不过处理队列；通过者将 score/reason 写入 `episode_processing_jobs`。
+- `bun run check:metadata-relevance` 验证相关 episode 入队、无关/排除 episode 被过滤，以及 score/reason 可追踪。
+
+已落地的 M1 daily email brief slice：
+
+- `daily_briefs` 表记录 workspace/user/date 维度的 sent/skipped/failed 结果、insight_count、subject、provider_message_id、error 与 sent_at，并用唯一约束防重复发送。
+- Worker 新增 deterministic daily brief 渲染与 mock email provider 验收路径，按用户 timezone 对当天 published insights 聚合。
+- Repository 新增 `recordDailyBrief`、`getDailyBrief`、`listDailyBriefs`、`listInsightsForDailyBrief`。
+- `bun run check:daily-brief` 验证 insight 聚合、邮件发送记录、同一天幂等更新、空 brief skipped 与 provider failed 记录。
+
+已落地的 M1 inbox / feedback / episode detail slice：
+
+- `insight_feedback` 表记录用户对 insight 的 `saved` / `irrelevant` / `wrong` / `archived` 反馈，按 workspace/user/insight 幂等更新。
+- Repository 新增 `listInboxItems`、`recordInsightFeedback`、`getInsightFeedback`、`getEpisodeDetail`，支持 inbox item 携带 episode/watch/source 元数据，episode detail 携带 transcript/summary/insights。
+- `bun run check:inbox-feedback-detail` 验证 inbox 查询、feedback 写入与过滤、episode detail + 极简播放器所需 audio/timestamp/transcript/summary/insight 数据。
+
+已落地的 M1 auth / usage events slice：
+
+- `sessions` 表支持轻量 session token、user/workspace 绑定、过期和撤销。
+- `usage_events` 表记录 view/save/irrelevant/wrong/playback/open_email 等行为及 entity metadata。
+- Repository 新增 `createSession`、`getSessionByToken`、`revokeSession`、`recordUsageEvent`、`listUsageEvents`。
+- `bun run check:auth-usage` 验证 token 解析到 user/workspace、过期/撤销拒绝，以及 usage event 记录/过滤。
+
 新增范围：
 
 - Auth。

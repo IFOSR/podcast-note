@@ -2,6 +2,10 @@
   "name": "@podcast-note/db",
   "version": "0.0.1",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sqlite": "./src/sqlite.ts",
+    "./repositories": "./src/repositories.ts"
+  }
 }
-
