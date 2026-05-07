@@ -19,9 +19,12 @@ From the repository root:
 
 ```bash
 bun run check:web-m15
+bun run check:preview-ui
 ```
 
-The check seeds an isolated SQLite database, creates a local session, creates/pauses a Watch, hydrates inbox and episode detail, records feedback and playback usage, then asserts workspace-scoped results.
+`check:web-m15` seeds an isolated SQLite database, creates a local session, creates/pauses a Watch, hydrates inbox and episode detail, records feedback and playback usage, then asserts workspace-scoped results.
+
+`check:preview-ui` starts the Bun preview server against an isolated SQLite database and verifies the actual trial workflow: homepage guidance, Watch form submit, one-click demo data, readable Inbox card, source link, and save feedback.
 
 ## Local preview
 
@@ -31,7 +34,9 @@ From the repository root:
 scripts/podcast-note start
 ```
 
-Open `http://127.0.0.1:3000`, then manage the process with `scripts/podcast-note status`, `scripts/podcast-note restart`, `scripts/podcast-note run-once`, `scripts/podcast-note logs`, and `scripts/podcast-note stop`.
+Open `http://127.0.0.1:3000` and use the page in this order: add a Watch, click `生成示例数据` if you do not have real source data yet, review the Inbox insight, then click `保存` or `没用` to confirm feedback works. Use `运行一次` when you want to run the M1 worker loop against the local database.
+
+Manage the process with `scripts/podcast-note status`, `scripts/podcast-note restart`, `scripts/podcast-note run-once`, `scripts/podcast-note logs`, and `scripts/podcast-note stop`.
 
 ## Next product step
 

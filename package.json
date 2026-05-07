@@ -25,7 +25,8 @@
     "check:auth-usage": "bun apps/worker/src/check-auth-usage.ts",
     "check:web-m15": "bun apps/worker/src/check-web-m15.ts",
     "check:m1-run-once": "bun apps/worker/src/check-m1-run-once.ts",
-    "check:start-script": "bun apps/worker/src/check-start-script.ts"
+    "check:start-script": "bun apps/worker/src/check-start-script.ts",
+    "check:preview-ui": "bun apps/worker/src/check-preview-ui.ts"
   },
   "workspaces": [
     "apps/*",

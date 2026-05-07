@@ -113,6 +113,8 @@ bun run check:start-script
 
 `check:start-script` covers the local trial script: `start`, `status`, `restart`, `run-once`, and `stop` process-management behavior against an isolated preview server.
 
+`check:preview-ui` covers the simplified local preview UI: the homepage must expose a usable Watch form, one-click demo data, worker run-once entry, readable Inbox insight cards, source links, and save/irrelevant feedback flow.
+
 ## Local Trial Script
 
 Start the product preview from the repository root:
@@ -143,7 +145,13 @@ Useful options:
 scripts/podcast-note start --port 3001 --db storage/podcast-note.sqlite
 ```
 
-The preview server seeds a local user/session and a default Watch if the SQLite database is empty, then shows Watches, Inbox items, a health endpoint, and a button to trigger the M1 run-once worker loop.
+The preview server seeds a local user/session and a default Watch if the SQLite database is empty. The homepage is a simplified hands-on workbench:
+
+1. Add or adjust a Watch from the form on the left.
+2. Click `生成示例数据` if you do not have real RSS/source data yet.
+3. Review the generated Inbox card, evidence excerpt, implication, and original-source link.
+4. Click `保存` or `没用` to verify the feedback loop.
+5. Click `运行一次` when you want to run the real M1 worker loop against the local database.
 
 Run the M1.5 worker end-to-end command against a local database with:
 

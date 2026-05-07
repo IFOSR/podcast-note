@@ -200,6 +200,7 @@ export function recordEpisodePlayback(input: {
 function normalizeWatchInput(input: WatchFormInput): Parameters<Repositories["createWatchForWorkspace"]>[1] {
   if (!input.name.trim()) throw new Error("Watch name is required.");
   if (!input.query.trim()) throw new Error("Watch query is required.");
+  const frequency = input.frequency ?? "daily";
   return {
     name: input.name.trim(),
     type: input.type ?? "topic",
@@ -209,7 +210,7 @@ function normalizeWatchInput(input: WatchFormInput): Parameters<Repositories["cr
     excludeTerms: normalizeTerms(input.excludeTerms),
     expandedTerms: normalizeTerms(input.expandedTerms),
     minRelevanceScore: input.minRelevanceScore ?? 0.6,
-    frequency: input.frequency ?? "daily",
+    frequency,
     backfillDays: input.backfillDays ?? 30,
     enabled: input.enabled ?? true
   };
