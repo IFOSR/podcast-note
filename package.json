@@ -22,7 +22,9 @@
     "check:metadata-relevance": "bun apps/worker/src/check-metadata-relevance.ts",
     "check:daily-brief": "bun apps/worker/src/check-daily-brief.ts",
     "check:inbox-feedback-detail": "bun apps/worker/src/check-inbox-feedback-detail.ts",
-    "check:auth-usage": "bun apps/worker/src/check-auth-usage.ts"
+    "check:auth-usage": "bun apps/worker/src/check-auth-usage.ts",
+    "check:web-m15": "bun apps/worker/src/check-web-m15.ts",
+    "check:m1-run-once": "bun apps/worker/src/check-m1-run-once.ts"
   },
   "workspaces": [
     "apps/*",

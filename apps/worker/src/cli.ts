@@ -6,6 +6,7 @@ import type { Episode } from "../../../packages/core/src/types.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
 import { demoWatch, episodeFromFixture, markdownReport, processTranscript, processTranscriptFixture, type TranscriptFixture } from "./pipeline.ts";
 import { processSources } from "./process-sources.ts";
+import { runM1Once } from "./m1-run-once.ts";
 
 const command = process.argv[2] ?? "help";
 
@@ -147,6 +148,20 @@ if (command === "demo") {
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
+} else if (command === "m1:run-once") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const result = await runM1Once({
+      repositories: createRepositories(openPodcastNoteDb(dbPath)),
+      workspaceId: flagValue("--workspace-id"),
+      now: flagValue("--now"),
+      pollingEpisodeLimit: numberFlagValue("--polling-limit"),
+      processingLimit: numberFlagValue("--processing-limit")
+    });
+    console.log(JSON.stringify({ ok: true, dbPath, ...result }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 } else {
   console.log(
     [
@@ -159,7 +174,8 @@ if (command === "demo") {
       "  transcribe-url <public-audio-or-episode-url>",
       "  query <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 20] [--format json] [--watch-id id] [--episode-id id]",
       "  export <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json] [--watch-id id] [--episode-id id]",
-      "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs] [--db storage/podcast-note.sqlite]"
+      "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs] [--db storage/podcast-note.sqlite]",
+      "  m1:run-once [--db storage/podcast-note.sqlite] [--workspace-id id] [--now ISO] [--polling-limit 100] [--processing-limit 10]"
     ].join("\n")
   );
 }

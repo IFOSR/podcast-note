@@ -84,6 +84,8 @@ bun run check:metadata-relevance
 bun run check:daily-brief
 bun run check:inbox-feedback-detail
 bun run check:auth-usage
+bun run check:web-m15
+bun run check:m1-run-once
 ```
 
 `check:workspace` covers the first M1 foundation slice: user upsert, idempotent personal workspace creation, and listing Watches scoped to that workspace.
@@ -103,6 +105,22 @@ bun run check:auth-usage
 `check:inbox-feedback-detail` covers the M1 product loop slice: querying inbox items with episode/watch metadata, saving feedback actions (`saved`/`irrelevant`/`wrong`/`archived`), filtering by feedback, and loading episode detail with transcript/summary/insights.
 
 `check:auth-usage` covers the M1 auth/usage slice: creating lightweight user sessions, resolving valid tokens to user/workspace context, rejecting expired/revoked sessions, and recording usage events such as view/playback.
+
+`check:web-m15` covers the M1.5 web product slice: creating a local web session, managing Watches through workspace-scoped server helpers, hydrating Inbox and Episode detail views, saving insight feedback, and recording view/playback usage events.
+
+`check:m1-run-once` covers the M1.5 worker run-once slice: planning due Watch polling jobs, discovering RSS episodes, metadata-filtering and queueing relevant episodes, processing the queue, and publishing insights in one deterministic worker call.
+
+Run the M1.5 worker end-to-end command against a local database with:
+
+```bash
+bun apps/worker/src/cli.ts m1:run-once --db storage/podcast-note.sqlite
+```
+
+Useful options:
+
+```bash
+bun apps/worker/src/cli.ts m1:run-once --workspace-id <workspace_id> --now 2026-05-07T08:00:00.000Z --polling-limit 100 --processing-limit 10
+```
 
 ## Source Connectors
 

@@ -1260,6 +1260,19 @@ M0-12 golden dataset + first eval script
 - Repository 新增 `createSession`、`getSessionByToken`、`revokeSession`、`recordUsageEvent`、`listUsageEvents`。
 - `bun run check:auth-usage` 验证 token 解析到 user/workspace、过期/撤销拒绝，以及 usage event 记录/过滤。
 
+已落地的 M1.5 Web productization slice：
+
+- `apps/web/src/app` 提供最小 Web App scaffold，保留后续替换为真实 Next.js App Router 页面的位置。
+- `apps/web/src/server/m1-app.ts` 提供 server-first 产品服务层：local session/context、Watch create/update/list、Inbox hydrate、Episode detail hydrate、feedback 和 playback usage events。
+- Web 服务层复用共享 SQLite repository，不重复造数据访问层，并保持所有读取/写入以 `workspaceId` 作用域隔离。
+- `bun run check:web-m15` 验证本地 session、Watch 管理、Inbox、Episode detail、feedback、view/playback usage event 的产品闭环。
+
+已落地的 M1.5 worker run-once slice：
+
+- Worker 新增 `runM1Once`，把 due watch polling、RSS episode discovery、metadata relevance enqueue、processing queue 和 insight publish 串成一次可触发流水线。
+- CLI 新增 `bun apps/worker/src/cli.ts m1:run-once --db <sqlite>`，支持 `--workspace-id`、`--now`、`--polling-limit`、`--processing-limit`。
+- `bun run check:m1-run-once` 使用 mock connector 和隔离 SQLite 验证 discover → relevance queue → processing → insight 的端到端闭环。
+
 新增范围：
 
 - Auth。
@@ -1273,6 +1286,8 @@ M0-12 golden dataset + first eval script
 - Episode detail + 极简播放器。
 - Daily email brief。
 - Usage events。
+- M1.5 Web App server-first scaffold 与产品服务层。
+- M1.5 worker `m1:run-once` 端到端触发命令。
 
 验收：
 
