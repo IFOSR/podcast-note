@@ -12,6 +12,7 @@
     "check:query-export": "bun apps/worker/src/check-query-export.ts",
     "check:skip-resume": "bun apps/worker/src/check-skip-resume.ts",
     "check:object-storage": "bun apps/worker/src/check-object-storage.ts",
+    "check:audio-formats": "bun apps/worker/src/check-audio-formats.ts",
     "check:connectors": "bun apps/worker/src/check-connectors.ts",
     "check:golden-eval": "bun apps/worker/src/check-golden-eval.ts",
     "check:workspace": "bun apps/worker/src/check-workspace.ts",

@@ -7,6 +7,7 @@ import { scoreEpisodeMetadata } from "../../../packages/core/src/scoring.ts";
 import { buildSemanticSegments } from "../../../packages/core/src/segmenting.ts";
 import { createLocalObjectStorage } from "../../../packages/storage/src/index.ts";
 import { demoWatch } from "./pipeline.ts";
+import { userWatchToSystemWatch } from "./process-sources.ts";
 
 const rss = `<?xml version="1.0"?>
 <rss>
@@ -30,6 +31,14 @@ const episode = parsed.episodes[0];
 if (!episode) throw new Error("RSS parser failed to produce an episode.");
 
 const watch = demoWatch();
+const workspaceScopedWatch = userWatchToSystemWatch({
+  workspaceId: "workspace_preview_check",
+  name: "Preview Check",
+  topic: "AI workflow"
+});
+if (workspaceScopedWatch.workspaceId !== "workspace_preview_check") {
+  throw new Error(`Process sources should preserve an explicit workspace id, got ${workspaceScopedWatch.workspaceId}.`);
+}
 const score = scoreEpisodeMetadata(watch, {
   id: "episode_fixture",
   title: episode.title,

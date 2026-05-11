@@ -31,7 +31,7 @@ export const manualConnector: SourceConnector = {
       description: meta(html, "og:description") ?? meta(html, "description"),
       publishedAt: meta(html, "article:published_time"),
       durationSec: parseDuration(meta(html, "music:duration") ?? meta(html, "video:duration")),
-      audioUrl: meta(html, "og:audio") ?? audioTag(html),
+      audioUrl: audioUrlFromHtml(html),
       pageUrl: meta(html, "og:url") ?? input,
       imageUrl: meta(html, "og:image"),
       language: html.match(/<html[^>]+lang=["']([^"']+)["']/i)?.[1],
@@ -77,6 +77,33 @@ function audioTag(html: string): string | undefined {
   return match?.[1] ? decodeHtml(match[1]).trim() : undefined;
 }
 
+function audioUrlFromHtml(html: string): string | undefined {
+  const audioUrl = meta(html, "og:audio")
+    ?? jsonStringField(html, "contentUrl")
+    ?? jsonStringField(html, "url")
+    ?? audioTag(html);
+  return audioUrl ? normalizeAudioUrl(audioUrl) : undefined;
+}
+
+export function normalizeAudioUrl(input: string): string {
+  try {
+    const url = new URL(input);
+    const ximalayaTarget = url.searchParams.get("jt");
+    if (ximalayaTarget && /\.(mp3|m4a|mp4a|wav|ogg|raw)(?:$|\?)/i.test(ximalayaTarget)) {
+      return ximalayaTarget;
+    }
+  } catch {
+    return input;
+  }
+  return input;
+}
+
+function jsonStringField(html: string, key: string): string | undefined {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = html.match(new RegExp(`"${escaped}"\\s*:\\s*"([^"]+)"`, "i"));
+  return match?.[1] ? decodeHtml(match[1]).replace(/\\u0026/g, "&").replace(/\\\//g, "/").trim() : undefined;
+}
+
 function hostname(input: string): string {
   try {
     return new URL(input).hostname;
@@ -99,4 +126,3 @@ function decodeHtml(input: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
 }
-

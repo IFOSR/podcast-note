@@ -11,6 +11,7 @@ import { putAudioCache, putTranscriptJson } from "../../../packages/storage/src/
 import { markdownReport, processTranscript } from "./pipeline.ts";
 
 export type UserWatchInput = {
+  workspaceId?: string;
   name: string;
   topic: string;
   language?: OutputLanguage;
@@ -40,6 +41,13 @@ export type ProcessedSourceResult = {
 
 type Repositories = NonNullable<Parameters<typeof processSources>[0]["repositories"]>;
 
+export type ProcessSourceInputsOptions = {
+  watch: UserWatchInput;
+  sources: UserSourcesInput;
+  outputDir?: string;
+  maxEpisodesPerSource?: number;
+};
+
 type SourceEpisodes = {
   source?: Source;
   episodes: Episode[];
@@ -55,6 +63,27 @@ export async function processSources(input: {
   const options = input.options ?? {};
   const watchInput = await loadJson<UserWatchInput>(options.watchPath ?? "inputs/watch.json");
   const sourcesInput = await loadJson<UserSourcesInput>(options.sourcesPath ?? "inputs/sources.json");
+  return processSourceInputs({
+    ...input,
+    options: {
+      watch: watchInput,
+      sources: sourcesInput,
+      outputDir: options.outputDir,
+      maxEpisodesPerSource: options.maxEpisodesPerSource
+    }
+  });
+}
+
+export async function processSourceInputs(input: {
+  options: ProcessSourceInputsOptions;
+  transcriptProvider: TranscriptProvider;
+  insightProvider: InsightProvider;
+  repositories?: Repositories;
+  objectStorage?: ObjectStorageAdapter;
+}): Promise<ProcessedSourceResult[]> {
+  const options = input.options;
+  const watchInput = options.watch;
+  const sourcesInput = options.sources;
   const watch = userWatchToSystemWatch(watchInput);
   if (input.repositories) ensureWorkspaceForWatch(input.repositories, watch);
   const outputRoot = resolve(options.outputDir ?? "outputs");
@@ -156,7 +185,7 @@ export function userWatchToSystemWatch(input: UserWatchInput): Watch {
 
   return {
     id: stableId("watch", `${input.name}:${query}`),
-    workspaceId: "workspace_local",
+    workspaceId: input.workspaceId ?? "workspace_local",
     name: input.name.trim(),
     type: "topic",
     query,

@@ -5,7 +5,7 @@ const DEFAULT_ENDPOINT = "https://listen-api.listennotes.com/api/v2";
 export const listenNotesConnector: SourceConnector = {
   type: "listennotes",
   canHandle(input: string): boolean {
-    return input.startsWith("listennotes:") || /^https?:\/\/(www\.)?listennotes\.com\//i.test(input);
+    return input.startsWith("listennotes:") || /^https?:\/\/(www\.)?listennotes\.com\//i.test(input) || (input.trim().length > 0 && !isHttpUrl(input));
   },
   async resolveSource(input: string): Promise<ResolvedSource> {
     const id = listenNotesId(input);
@@ -15,10 +15,17 @@ export const listenNotesConnector: SourceConnector = {
         url: input,
         externalId: id,
         title: id ? `Listen Notes ${id}` : input,
-        metadata: { resolver: "listennotes", mode: "metadata-only" }
+        metadata: { resolver: "listennotes", mode: "metadata-only", query: id ? undefined : input }
       };
     }
-    if (!id) throw new Error(`Listen Notes source requires a podcast id: ${input}`);
+    if (!id) {
+      return {
+        type: "listennotes",
+        url: input,
+        title: input,
+        metadata: { resolver: "listennotes", mode: "search", query: input }
+      };
+    }
     const data = await listenNotesJson(`/podcasts/${encodeURIComponent(id)}`);
     return {
       type: "listennotes",
@@ -35,7 +42,12 @@ export const listenNotesConnector: SourceConnector = {
   async listEpisodes(source: ResolvedSource, options = {}): Promise<ResolvedEpisode[]> {
     const id = source.externalId ?? listenNotesId(source.url);
     if (!apiKey()) return [];
-    if (!id) throw new Error(`Listen Notes source requires a podcast id: ${source.url}`);
+    if (!id) {
+      const data = await listenNotesJson("/search", { q: source.url, type: "episode", sort_by_date: "1" });
+      return ((data.results as Record<string, unknown>[] | undefined) ?? [])
+        .map((episode) => episodeFromListenNotes(episode, source))
+        .slice(0, options.limit ?? 10);
+    }
     const data = await listenNotesJson(`/podcasts/${encodeURIComponent(id)}`, { sort: "recent_first" });
     return (data.episodes ?? [])
       .map((episode: Record<string, unknown>) => episodeFromListenNotes(episode, source))
@@ -100,6 +112,10 @@ function listenNotesId(input: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isHttpUrl(input: string): boolean {
+  return /^https?:\/\//i.test(input);
 }
 
 function apiKey(): string | undefined {

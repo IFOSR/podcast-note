@@ -53,8 +53,9 @@ export function createVolcengineTranscriptProvider(
   const language = options.language ?? process.env["VOLCENGINE_ASR_LANGUAGE"];
   const enableSpeakerInfo = options.enableSpeakerInfo ?? booleanFromEnv("VOLCENGINE_ASR_ENABLE_SPEAKER_INFO", true);
 
-  if (!apiKey && !appId) throw new Error("VOLCENGINE_ASR_API_KEY or VOLCENGINE_ASR_APP_ID is required to create the Volcengine transcript provider.");
-  if (!apiKey && !accessToken) throw new Error("VOLCENGINE_ASR_API_KEY or VOLCENGINE_ASR_ACCESS_TOKEN is required to create the Volcengine transcript provider.");
+  if (!apiKey && (!appId || !accessToken)) {
+    throw new Error("VOLCENGINE_ASR_API_KEY or both VOLCENGINE_ASR_APP_ID and VOLCENGINE_ASR_ACCESS_TOKEN are required to create the Volcengine transcript provider.");
+  }
 
   return {
     name: "volcengine",
@@ -66,7 +67,7 @@ export function createVolcengineTranscriptProvider(
 
       const format = audioFormatFromUrl(input.audioUrl);
       if (!format) {
-        throw new Error("Volcengine transcription requires a direct audio URL ending in .mp3, .wav, .ogg, or .raw.");
+        throw new Error("Volcengine transcription requires a direct audio URL ending in .mp3, .m4a, .mp4a, .wav, .ogg, or .raw.");
       }
 
       const requestId = crypto.randomUUID();
@@ -259,19 +260,23 @@ async function pollTask(input: {
   throw new Error(`Volcengine transcription timed out after ${input.timeoutMs}ms.`);
 }
 
-function authHeaders(input: { apiKey?: string; appId?: string; accessToken?: string }): Record<string, string> {
+export function volcengineAuthHeaders(input: { apiKey?: string; appId?: string; accessToken?: string }): Record<string, string> {
+  if (input.appId && input.accessToken) {
+    return {
+      "X-Api-App-Key": input.appId,
+      "X-Api-Access-Key": input.accessToken
+    };
+  }
   if (input.apiKey) {
     return {
       "X-Api-Key": input.apiKey
     };
   }
-  if (!input.appId || !input.accessToken) {
-    throw new Error("Volcengine ASR requires either VOLCENGINE_ASR_API_KEY or both VOLCENGINE_ASR_APP_ID and VOLCENGINE_ASR_ACCESS_TOKEN.");
-  }
-  return {
-    "X-Api-App-Key": input.appId,
-    "X-Api-Access-Key": input.accessToken
-  };
+  throw new Error("Volcengine ASR requires either VOLCENGINE_ASR_API_KEY or both VOLCENGINE_ASR_APP_ID and VOLCENGINE_ASR_ACCESS_TOKEN.");
+}
+
+function authHeaders(input: { apiKey?: string; appId?: string; accessToken?: string }): Record<string, string> {
+  return volcengineAuthHeaders(input);
 }
 
 function volcengineResponseToTranscriptionOutput(result: VolcengineQueryResponse, language?: string): TranscriptionOutput {
@@ -304,10 +309,12 @@ function normalizeMode(value: string | undefined): "standard" | "flash" {
   return value === "flash" ? "flash" : "standard";
 }
 
-function audioFormatFromUrl(input: string): "mp3" | "wav" | "ogg" | "raw" | undefined {
+export function audioFormatFromUrl(input: string): "mp3" | "m4a" | "mp4a" | "wav" | "ogg" | "raw" | undefined {
   try {
     const pathname = new URL(input).pathname.toLowerCase();
     if (pathname.endsWith(".mp3")) return "mp3";
+    if (pathname.endsWith(".m4a")) return "m4a";
+    if (pathname.endsWith(".mp4a")) return "mp4a";
     if (pathname.endsWith(".wav")) return "wav";
     if (pathname.endsWith(".ogg")) return "ogg";
     if (pathname.endsWith(".raw")) return "raw";

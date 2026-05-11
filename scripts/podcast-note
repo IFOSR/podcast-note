@@ -72,6 +72,15 @@ done
 COMMAND="${COMMAND:-status}"
 export PATH="$HOME/.bun/bin:$PATH"
 
+load_env() {
+  local env_file="$ROOT_DIR/.env"
+  [[ -f "$env_file" ]] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
+
 is_running() {
   [[ -f "$PID_FILE" ]] || return 1
   local pid
@@ -86,9 +95,10 @@ start_server() {
     return 0
   fi
 
+  load_env
   mkdir -p "$(dirname "$PID_FILE")" "$(dirname "$LOG_FILE")" "$(dirname "$DB_PATH")"
   : > "$LOG_FILE"
-  nohup bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" >> "$LOG_FILE" 2>&1 &
+  setsid bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" >> "$LOG_FILE" 2>&1 < /dev/null &
   local pid=$!
   echo "$pid" > "$PID_FILE"
 
@@ -164,6 +174,7 @@ case "$COMMAND" in
     fi
     ;;
   run-once)
+    load_env
     bun apps/worker/src/cli.ts m1:run-once --db "$DB_PATH"
     ;;
   *)
