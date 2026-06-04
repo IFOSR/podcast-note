@@ -31,12 +31,12 @@ Then open:
 http://127.0.0.1:3000
 ```
 
-The preview page intentionally exposes only two user-facing entry points:
+The preview intentionally separates the two user-facing task types:
 
-1. Process one podcast link directly.
-2. Monitor a target site/platform/podcast name plus keywords.
+1. `/` processes one concrete podcast link directly as an immediate one-off task. It does not ask for keywords and does not create a monitoring task.
+2. `/monitor` creates and manages monitoring tasks. It asks for a target site or platform name, channel or host name, optional comma-separated keywords, frequency, and backfill episode count.
 
-After submission, the page runs the real processing path. It does not generate mock data. The page shows an `Agent 执行过程` panel before results with these stages:
+After submission, the page runs the real processing path. It does not generate mock data. The immediate processing page shows an `Agent 执行过程` panel before results with these stages:
 
 - 接收任务
 - 解析来源
@@ -58,6 +58,19 @@ Results render as episode reports:
 - 音频核验 player with timestamp buttons
 
 Click any timestamp in recommendations, chapters, or insights to jump the audio player to that source segment and verify the summary against the original audio.
+
+The monitoring page is task-management first: each monitoring task is collapsed by default, shows `监控中` or `已停止`, and provides `停止`/`开始` plus `删除`. Expanding a task shows that task's own produced episodes; each produced episode is also collapsed by default and expands into the same report elements as an immediate task. Immediate task results are not shown inside monitoring tasks.
+
+Clicking `开始监控` does not depend on the browser tab staying open. The server immediately stores the Watch, starts a background backfill run, and the preview process keeps a built-in scheduler alive while `scripts/podcast-note` is running. The scheduler wakes every 5 minutes by default, checks enabled Watches, and only processes a Watch again when its configured frequency is due. URL-based source Watches, such as Xiaoyuzhou podcast pages, are treated as "monitor this source" and newly discovered episodes are queued for real transcription and insight generation.
+
+Scheduler options can be changed with environment variables:
+
+```bash
+PODCAST_NOTE_SCHEDULER_ENABLED=true
+PODCAST_NOTE_SCHEDULER_INTERVAL_MS=300000
+PODCAST_NOTE_SCHEDULER_POLLING_LIMIT=20
+PODCAST_NOTE_SCHEDULER_PROCESSING_LIMIT=3
+```
 
 Manage the local process with:
 
@@ -179,6 +192,8 @@ bun run check:preview-ui
 bun run check:start-script
 bun run check:web-m15
 bun run check:m1-run-once
+bun run check:url-watch-queue
+bun run check:xiaoyuzhou-podcast-processing
 ```
 
 Other deterministic checks remain available:
@@ -208,6 +223,8 @@ Current key coverage:
 - `check:start-script`: `start`, `status`, `restart`, `run-once`, and `stop` process-management behavior against an isolated preview server.
 - `check:web-m15`: local web session, workspace-scoped service helpers, inbox/detail hydration, feedback, and playback usage events.
 - `check:m1-run-once`: due Watch polling, RSS discovery, metadata relevance, queue processing, and insight publication in one deterministic worker call.
+- `check:url-watch-queue`: URL source Watches queue and process newly discovered episodes instead of filtering them out as unrelated.
+- `check:xiaoyuzhou-podcast-processing`: Xiaoyuzhou podcast pages resolve recent episodes with direct audio URLs.
 
 ## Demo / Fixture Commands
 

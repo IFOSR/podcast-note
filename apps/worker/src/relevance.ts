@@ -57,6 +57,7 @@ export function scoreEpisodeForWatch(episode: Episode, watch: Watch): RelevanceD
     ...Object.values(episode.metadata ?? {}).map((value) => typeof value === "string" ? value : JSON.stringify(value))
   ].filter(Boolean).join("\n"));
   const queryTokens = tokenize(watch.query);
+  const sourceQuery = isHttpUrl(watch.query);
   const includeTerms = uniqueTerms([...watch.includeTerms, ...watch.expandedTerms]);
   const excludeTerms = uniqueTerms(watch.excludeTerms);
 
@@ -65,9 +66,10 @@ export function scoreEpisodeForWatch(episode: Episode, watch: Watch): RelevanceD
   const matchedExcludeTerms = excludeTerms.filter((term) => includesTerm(haystack, term));
 
   let score = 0.1;
-  if (queryTokens.length > 0) score += 0.35 * (matchedQueryTokens.length / queryTokens.length);
+  if (sourceQuery) score += 0.55;
+  if (!sourceQuery && queryTokens.length > 0) score += 0.35 * (matchedQueryTokens.length / queryTokens.length);
   if (includeTerms.length > 0) score += 0.5 * Math.min(1, matchedIncludeTerms.length / Math.min(includeTerms.length, 2));
-  if (normalizeText(episode.title).includes(normalizeText(watch.query))) score += 0.2;
+  if (!sourceQuery && normalizeText(episode.title).includes(normalizeText(watch.query))) score += 0.2;
   if (matchedExcludeTerms.length > 0) score = Math.min(score, 0.05);
   score = clamp(score, 0, 1);
 
@@ -75,6 +77,7 @@ export function scoreEpisodeForWatch(episode: Episode, watch: Watch): RelevanceD
     matchedQueryTokens,
     matchedTerms: matchedIncludeTerms,
     excludedTerms: matchedExcludeTerms,
+    sourceQuery,
     minRelevanceScore: watch.minRelevanceScore
   };
   return {
@@ -95,6 +98,10 @@ function tokenize(query: string): string[] {
 
 function includesTerm(haystack: string, term: string): boolean {
   return haystack.includes(normalizeText(term));
+}
+
+function isHttpUrl(input: string): boolean {
+  return /^https?:\/\//i.test(input);
 }
 
 function normalizeText(value: string): string {

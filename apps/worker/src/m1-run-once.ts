@@ -1,4 +1,5 @@
 import type { SourceConnector } from "../../../packages/connectors/src/index.ts";
+import type { InsightProvider, TranscriptProvider } from "../../../packages/ai/src/index.ts";
 import type { createRepositories } from "../../../packages/db/src/repositories.ts";
 import { runEpisodeProcessingQueue } from "./episode-processing-queue.ts";
 import { enqueueRelevantEpisodes } from "./relevance.ts";
@@ -11,6 +12,8 @@ export type RunM1OnceInput = {
   workspaceId?: string;
   now?: string;
   connector?: SourceConnector;
+  transcriptProvider?: TranscriptProvider;
+  insightProvider?: InsightProvider;
   pollingEpisodeLimit?: number;
   processingLimit?: number;
 };
@@ -56,6 +59,8 @@ export async function runM1Once(input: RunM1OnceInput): Promise<RunM1OnceResult>
 
   const processingResult = await runEpisodeProcessingQueue({
     repositories: input.repositories,
+    transcriptProvider: input.transcriptProvider,
+    insightProvider: input.insightProvider,
     limit: input.processingLimit ?? 10
   });
   const insights = input.repositories.listInsights({ limit: 1000 })

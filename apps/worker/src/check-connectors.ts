@@ -1,4 +1,4 @@
-import { connectorFor, connectors, listenNotesConnector, normalizeAudioUrl } from "../../../packages/connectors/src/index.ts";
+import { connectorFor, connectors, listenNotesConnector, normalizeAudioUrl, xiaoyuzhouConnector } from "../../../packages/connectors/src/index.ts";
 
 const routes = [
   ["https://example.com/feed.xml", "rss"],
@@ -48,6 +48,18 @@ try {
   if (textTopicEpisodes.length !== 0) throw new Error("Listen Notes text topic without an API key should not make network calls.");
 } finally {
   if (originalKey) process.env["LISTEN_NOTES_API_KEY"] = originalKey;
+}
+
+if (process.env["CHECK_LIVE_CONNECTORS"] === "true") {
+  const source = await xiaoyuzhouConnector.resolveSource("https://www.xiaoyuzhoufm.com/podcast/6830fbe029612ab92d299c9d");
+  const episodes = await xiaoyuzhouConnector.listEpisodes(source, { limit: 3 });
+  if (episodes.length !== 3) throw new Error(`Expected Xiaoyuzhou podcast page to list 3 episodes, got ${episodes.length}.`);
+  if (episodes.some((episode) => episode.pageUrl.includes("/podcast/"))) {
+    throw new Error(`Xiaoyuzhou podcast page must list episode URLs, got ${JSON.stringify(episodes.map((episode) => episode.pageUrl))}.`);
+  }
+  if (episodes.some((episode) => !episode.audioUrl?.endsWith(".m4a"))) {
+    throw new Error(`Xiaoyuzhou podcast episodes must expose direct .m4a audio URLs, got ${JSON.stringify(episodes.map((episode) => episode.audioUrl))}.`);
+  }
 }
 
 console.log("Connector registry check passed.");

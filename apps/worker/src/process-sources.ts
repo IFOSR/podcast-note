@@ -46,6 +46,7 @@ export type ProcessSourceInputsOptions = {
   sources: UserSourcesInput;
   outputDir?: string;
   maxEpisodesPerSource?: number;
+  runId?: string;
 };
 
 type SourceEpisodes = {
@@ -92,7 +93,7 @@ export async function processSourceInputs(input: {
 
   assertUserSourcesInput(sourcesInput);
   input.repositories?.upsertWatch(watch);
-  const runId = input.repositories?.startProcessingRun({
+  const runId = options.runId ?? input.repositories?.startProcessingRun({
     watchId: watch.id,
     sources: sourcesInput.sources
   });
@@ -102,9 +103,11 @@ export async function processSourceInputs(input: {
       const resolved = await episodesFromSource(source, maxEpisodesPerSource);
       if (resolved.source) input.repositories?.upsertSource(resolved.source);
       for (const episode of resolved.episodes) {
+        input.repositories?.upsertEpisode(episode);
+        updateStage(input.repositories, runId, episode.id, source, "resolved", "completed");
+      }
+      for (const episode of resolved.episodes) {
         try {
-          input.repositories?.upsertEpisode(episode);
-          updateStage(input.repositories, runId, episode.id, source, "resolved", "completed");
           if (!episode.audioUrl) {
             throw new Error(`No public audio URL could be resolved for ${episode.title} (${episode.pageUrl}).`);
           }
@@ -227,9 +230,10 @@ async function episodesFromSource(source: string, limit: number): Promise<Source
 
   const resolvedSource = await connector.resolveSource(source);
   const storedSource = resolvedSourceToSource(resolvedSource);
+  const episodes = await connector.listEpisodes(resolvedSource, { limit });
   return {
     source: storedSource,
-    episodes: [resolvedEpisodeToEpisode(await connector.resolveEpisode(source), storedSource.id)]
+    episodes: episodes.map((episode) => resolvedEpisodeToEpisode(episode, storedSource.id))
   };
 }
 

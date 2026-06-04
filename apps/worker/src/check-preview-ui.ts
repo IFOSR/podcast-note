@@ -20,7 +20,8 @@ try {
       PATH: `${process.env.HOME}/.bun/bin:${process.env.PATH ?? ""}`,
       VOLCENGINE_ASR_API_KEY: "",
       VOLCENGINE_ASR_APP_ID: "",
-      VOLCENGINE_ASR_ACCESS_TOKEN: ""
+      VOLCENGINE_ASR_ACCESS_TOKEN: "",
+      LISTEN_NOTES_API_KEY: ""
     },
     stdout: "pipe",
     stderr: "pipe"
@@ -43,19 +44,19 @@ try {
 
   const home = fetchText(url);
   assertIncludes(home, "处理一个播客链接", "首页必须保留具体播客链接处理入口。");
-  assertIncludes(home, "监控一个目标", "首页必须保留目标站点和关键词监控入口。");
   assertIncludes(home, "name=\"podcastUrl\"", "播客链接表单需要 podcastUrl 输入框。");
   assertIncludes(home, "action=\"/api/process-link\"", "播客链接表单需要提交到专用处理接口。");
-  assertIncludes(home, "action=\"/api/monitor-target\"", "目标监控表单需要提交到专用监控接口。");
-  assertIncludes(home, "监控中", "首页应展示当前监控列表。");
+  assertIncludes(home, "href=\"/monitor\"", "首页需要提供进入监控任务页面的导航。");
+  assertNotIncludes(home, "action=\"/api/monitor-target\"", "即时处理首页不应混入目标监控表单。");
+  assertNotIncludes(home, "id=\"monitorKeywords\"", "即时处理首页不需要填写关键词。");
+  assertNotIncludes(home, "监控中", "即时处理首页不应展示监控任务管理列表。");
   assertIncludes(home, "Agent 执行过程", "结果前需要展示 Agent 的执行过程。");
-  assertIncludes(home, "解析来源", "Agent 执行过程需要说明解析来源步骤。");
-  assertIncludes(home, "转写音频", "Agent 执行过程需要说明转写音频步骤。");
-  assertIncludes(home, "提炼内容", "Agent 执行过程需要说明提炼内容步骤。");
-  assertIncludes(home, "生成报告", "Agent 执行过程需要说明生成报告步骤。");
+  assertIncludes(home, "<details class=\"card full agent-panel\"", "Agent 执行过程默认应是可收起的 details 面板。");
+  assertIncludes(home, "当前没有正在处理的即时任务", "没有当前任务时 Agent 面板应展示空态，而不是历史执行流程。");
+  assertIncludes(home, "历史处理结果只展示在下方结果区", "Agent 面板必须说明历史结果与当前任务状态分离。");
+  assertNotIncludes(home, "最近一次已完成", "没有当前任务时不应展示最近一次历史任务状态。");
   assertIncludes(home, "data-busy-label=\"正在处理\"", "提交按钮需要点击后的处理中状态。");
-  assertIncludes(home, "data-busy-label=\"正在监控\"", "监控按钮需要点击后的处理中状态。");
-  assertIncludes(home, "请不要重复提交", "页面需要告诉用户长流程处理中不要重复提交。");
+  assertIncludes(home, "请不要重复提交", "前端脚本需要在提交后告诉用户长流程处理中不要重复提交。");
   assertIncludes(home, "结果", "首页应展示处理结果区域。");
   assertNotIncludes(home, "添加 Watch", "现阶段首页不应暴露通用 Watch 创建入口。");
   assertNotIncludes(home, "立即试用：添加关注主题", "现阶段首页不应继续使用旧的新手引导。");
@@ -67,9 +68,25 @@ try {
   assertNotIncludes(home, "scripts/podcast-note", "普通用户页面不应展示终端命令。");
   assertNotIncludes(home, "No insights yet. Run the worker once after configuring real sources.", "首页不能再显示旧的不可操作空态文案。");
 
+  const monitorPage = fetchText(`${url}/monitor`);
+  assertIncludes(monitorPage, "监控一个目标", "监控页必须保留目标监控入口。");
+  assertIncludes(monitorPage, "name=\"target\"", "监控页需要目标站点或平台输入框。");
+  assertIncludes(monitorPage, "name=\"channel\"", "监控页需要频道名称或主播名称输入框。");
+  assertIncludes(monitorPage, "频道链接 / 频道名称 / 主播名称", "监控页应允许用户提供频道链接或频道名称。");
+  assertIncludes(monitorPage, "优先填频道链接", "监控页需要明确频道链接是更可靠输入。");
+  assertIncludes(monitorPage, "关键词（可选，多个用逗号分割）", "监控关键词必须是可选且支持逗号分割。");
+  assertIncludes(monitorPage, "name=\"frequency\"", "监控页需要频率输入。");
+  assertIncludes(monitorPage, "name=\"maxEpisodes\"", "监控页需要回看集数输入。");
+  assertIncludes(monitorPage, "action=\"/api/monitor-target\"", "目标监控表单需要提交到专用监控接口。");
+  assertIncludes(monitorPage, "data-busy-label=\"正在创建\"", "监控按钮只需要展示创建任务中的短暂状态。");
+  assertIncludes(monitorPage, "监控任务", "监控页应展示当前监控任务列表。");
+  assertNotIncludes(monitorPage, "action=\"/api/process-link\"", "监控页不应混入即时处理表单。");
+  assertNotIncludes(monitorPage, "name=\"podcastUrl\"", "监控页不应展示具体播客链接输入框。");
+  assertNotIncludes(monitorPage, "<details class=\"card full agent-panel\" id=\"agent-status\">", "监控页不应展示即时任务的 Agent 执行过程面板。");
+  assertNotIncludes(monitorPage, "<h2>结果</h2>", "监控页不应展示即时任务全局结果区。");
+
   const linkResponse = postFormAllowError(`${url}/api/process-link`, {
-    podcastUrl: "listennotes:podcast-fixture",
-    keywords: "AI agent, workflow"
+    podcastUrl: "listennotes:podcast-fixture"
   });
   if (linkResponse.status !== 500) {
     throw new Error(`未配置真实处理时应返回 500 配置错误，got ${JSON.stringify(linkResponse)}`);
@@ -77,19 +94,58 @@ try {
   assertIncludes(linkResponse.body, "真实处理未配置", "Web 不能在缺少真实处理配置时返回 mock 结果。");
 
   const monitorResponse = postFormAllowError(`${url}/api/monitor-target`, {
-    target: "AI组织",
+    target: "小宇宙",
+    channel: "AI组织",
     keywords: "AI agent, workflow",
     frequency: "realtime",
-    backfillDays: "14"
+    maxEpisodes: "4"
   });
-  if (monitorResponse.status !== 500) {
-    throw new Error(`未配置真实处理时目标监控应返回 500 配置错误，got ${JSON.stringify(monitorResponse)}`);
+  if (monitorResponse.status !== 303 || !monitorResponse.headers.includes("/monitor")) {
+    throw new Error(`目标监控创建应立即重定向回监控页，不应阻塞等待真实处理，got ${JSON.stringify(monitorResponse)}`);
   }
-  assertIncludes(monitorResponse.body, "真实处理未配置", "目标监控不能在缺少真实处理配置时返回 mock 结果。");
+  assertIncludes(monitorResponse.headers, "set-cookie: podcast_note_notice=", "监控创建提示应通过 flash cookie 传递，避免中文 notice 出现在 URL 中变成乱码。");
+  assertNotIncludes(monitorResponse.headers, "%25E", "Location header 不应包含二次编码后的中文提示。");
+  assertNotIncludes(monitorResponse.body, "Listen Notes episode requires an id", "目标监控的文本输入不能被当成 Listen Notes 单集 ID 解析。");
+  const asyncMonitorPage = fetchText(`${url}/monitor`);
+  assertIncludes(asyncMonitorPage, "AI组织", "监控任务创建后应立即出现在监控任务列表。");
+  assertIncludes(asyncMonitorPage, "回看处理进度", "异步监控任务需要在任务卡片内展示后台回看进度。");
+  assertIncludes(asyncMonitorPage, "data-watch-progress", "监控进度需要有可局部替换的 DOM 容器。");
+  assertIncludes(asyncMonitorPage, "startMonitorPolling()", "监控页应使用局部轮询更新，不应整页刷新。");
+  assertNotIncludes(asyncMonitorPage, "window.location.href = \"/monitor\"", "监控页不能通过整页刷新更新进度，否则会折叠用户正在阅读的内容。");
+  assertIncludes(asyncMonitorPage, "回看失败", "缺少真实处理配置时，后台 run 应失败并在监控任务内展示。");
+  assertIncludes(asyncMonitorPage, "真实处理未配置", "后台处理配置错误应展示在监控任务进度里，而不是阻塞表单提交。");
+  const fragments = JSON.parse(fetchText(`${url}/api/monitor-fragments`)) as {
+    ok: boolean;
+    watches: Array<{ id: string; progressHtml: string; outputCountHtml: string; outputs: Array<{ id: string; html: string }> }>;
+  };
+  if (!fragments.ok || !fragments.watches.some((watch) => watch.progressHtml.includes("回看处理进度"))) {
+    throw new Error("监控局部更新 API 需要返回每个任务的进度片段。");
+  }
 
   const refreshed = fetchText(url);
   assertNotIncludes(refreshed, "AI Agent 产品团队如何落地工作流", "Web preview 不应再生成本地示例/mock insight。");
   assertNotIncludes(refreshed, "local-demo", "Web preview 不应再展示 local-demo mock 数据。");
+
+  seedImmediateOnlyEpisode(dbPath);
+  const immediateOnlyHome = fetchText(url);
+  assertIncludes(immediateOnlyHome, "Immediate-only Xiaoyuzhou episode", "即时处理历史结果应该展示在首页结果区。");
+  const immediateOnlyMonitorPage = fetchText(`${url}/monitor`);
+  assertNotIncludes(immediateOnlyMonitorPage, "Immediate-only Xiaoyuzhou episode", "即时处理历史结果不应出现在监控任务页。");
+
+  seedMonitorOnlySummary(dbPath);
+  const monitorOnlyHome = fetchText(url);
+  assertNotIncludes(monitorOnlyHome, "Monitor-only Xiaoyuzhou episode", "监控任务生成的结果不应映射到即时处理结果区。");
+
+  seedEmptyMonitorRun(dbPath);
+  const emptyRunMonitorPage = fetchText(`${url}/monitor`);
+  assertIncludes(emptyRunMonitorPage, "Empty Monitor", "无产出的监控任务也应该展示任务卡片。");
+  assertIncludes(emptyRunMonitorPage, "回看处理进度", "监控任务需要展示最近一次回看处理进度。");
+  assertIncludes(emptyRunMonitorPage, "解析目标", "监控进度需要展示正在解析的目标。");
+  assertIncludes(emptyRunMonitorPage, "当前处理", "监控进度需要展示当前处理对象。");
+  assertIncludes(emptyRunMonitorPage, "回看发现", "监控进度需要展示回看发现与产出数量。");
+  assertIncludes(emptyRunMonitorPage, "回看完成", "已完成的回看任务需要展示完成状态。");
+  assertIncludes(emptyRunMonitorPage, "没有产出内容", "无产出的回看需要明确告诉用户没有产出。");
+  assertIncludes(emptyRunMonitorPage, "请优先提供频道页、RSS 或单集链接", "无产出的回看需要给出下一步修正建议。");
 
   seedProcessedEpisode(dbPath);
   const reportHome = fetchText(url);
@@ -97,6 +153,28 @@ try {
   assertIncludes(reportHome, "<audio", "结果报告需要内嵌音频播放器。");
   assertIncludes(reportHome, "data-seek", "章节和核心观点时间戳需要能跳到对应音频片段。");
   assertIncludes(reportHome, "跳到对应音频片段播放", "时间戳按钮需要说明可播放对应片段。");
+  assertNotIncludes(reportHome, "<span class=\"score\">相关度", "核心观点不应再使用含糊的相关度文案。");
+  assertNotIncludes(reportHome, "打开原文</a><form method=\"post\" action=\"/api/feedback\"", "核心观点卡片不应提供打开原文按钮。");
+  assertNotIncludes(reportHome, "action=\"/api/watch-action\"", "即时处理首页不应展示监控任务管理操作。");
+
+  const reportMonitorPage = fetchText(`${url}/monitor`);
+  assertIncludes(reportMonitorPage, "action=\"/api/watch-action\"", "监控卡片需要提供任务管理操作。");
+  assertIncludes(reportMonitorPage, "<details class=\"watch\" data-watch-id=", "每个监控任务默认应是可收起的 details，并带有局部更新标识。");
+  assertIncludes(reportMonitorPage, "<details class=\"watch-output\" data-output-id=", "每个监控任务产出默认应是可收起的 details，并带有稳定输出标识。");
+  assertIncludes(reportMonitorPage, ">停止</button>", "运行中的监控需要提供停止操作。");
+  assertIncludes(reportMonitorPage, ">删除</button>", "监控需要提供删除操作。");
+  assertIncludes(reportMonitorPage, "Preview Audio", "监控任务列表需要展示任务名称。");
+  assertIncludes(reportMonitorPage, "Preview audio verification episode", "展开监控任务后应能看到该任务产出的内容。");
+  assertIncludes(reportMonitorPage, "与处理目标匹配度", "核心观点匹配度需要说明是和当前处理目标匹配。");
+  assertNotIncludes(reportMonitorPage, "<span class=\"score\">相关度", "核心观点不应再使用含糊的相关度文案。");
+
+  const pauseResponse = postForm(`${url}/api/watch-action`, { watchId: "watch_preview_audio", action: "pause" });
+  if (!pauseResponse.includes("/monitor")) {
+    throw new Error(`暂停监控后应重定向回监控页，got ${pauseResponse}`);
+  }
+  const pausedMonitorPage = fetchText(`${url}/monitor`);
+  assertIncludes(pausedMonitorPage, ">开始</button>", "暂停后的监控需要提供开始操作。");
+  assertIncludes(pausedMonitorPage, "已停止", "暂停后的监控任务状态应显示已停止。");
 
   const summaryBeforeFeedback = JSON.parse(fetchText(`${url}/api/summary`));
   const insightId = summaryBeforeFeedback.inbox?.[0]?.id;
@@ -105,8 +183,12 @@ try {
     if (!feedbackResponse.includes("/")) {
       throw new Error(`保存反馈后应重定向回首页，got ${feedbackResponse}`);
     }
-    const afterFeedback = fetchText(url);
-    assertIncludes(afterFeedback, "已保存", "提交保存反馈后 Insight 卡片应显示已保存状态。");
+    assertIncludes(feedbackResponse, "set-cookie: podcast_note_notice=", "保存反馈提示应通过 flash cookie 传递。");
+    const afterFeedbackSummary = JSON.parse(fetchText(`${url}/api/summary`));
+    const feedbackAction = afterFeedbackSummary.inbox?.find((item: { id: string }) => item.id === insightId)?.feedbackAction;
+    if (feedbackAction !== "saved") {
+      throw new Error(`提交保存反馈后应持久化 feedbackAction=saved，got ${feedbackAction}`);
+    }
   }
 
   console.log(JSON.stringify({ ok: true, port, dbPath }, null, 2));
@@ -224,4 +306,155 @@ function seedProcessedEpisode(path: string): void {
       model: "fixture"
     }]
   }, watch, "fixture");
+}
+
+function seedImmediateOnlyEpisode(path: string): void {
+  const db = openPodcastNoteDb(path);
+  const repos = createRepositories(db);
+  const user = repos.upsertUser({ id: "user_local_preview", email: "local-preview@example.invalid", name: "Local Preview", timezone: "Asia/Shanghai" });
+  const workspace = repos.ensurePersonalWorkspaceForUser(user.id);
+  const watch = repos.createWatchForWorkspace(workspace.id, {
+    id: "watch_immediate_only",
+    name: "Immediate-only task",
+    type: "topic",
+    query: "即时处理：https://www.xiaoyuzhoufm.com/episode/immediate-only",
+    outputLanguage: "zh-CN",
+    includeTerms: [],
+    excludeTerms: [],
+    minRelevanceScore: 0.65,
+    frequency: "daily",
+    backfillDays: 1,
+    enabled: true
+  });
+  const episode = repos.upsertEpisode({
+    id: "ep_immediate_only",
+    sourceId: undefined,
+    title: "Immediate-only Xiaoyuzhou episode",
+    description: "Fixture used to ensure immediate results do not leak into monitor tasks.",
+    durationSec: 90,
+    audioUrl: "https://example.invalid/immediate-only.mp3",
+    pageUrl: "https://www.xiaoyuzhoufm.com/episode/immediate-only",
+    language: "zh-CN"
+  });
+  repos.saveTranscript({
+    episodeId: episode.id,
+    provider: "fixture",
+    model: "fixture",
+    transcript: {
+      language: "zh-CN",
+      durationSec: 90,
+      segments: [{ startSec: 0, endSec: 30, text: "Immediate-only transcript segment." }]
+    }
+  });
+  db.query(`
+    insert into episode_summaries (
+      id, episode_id, output_language, one_liner, overview, chapters_json, worth_listening_json, entities_json, prompt_version, model
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    "sum_immediate_only",
+    episode.id,
+    "zh-CN",
+    "Immediate-only summary.",
+    "This result should appear only on the immediate processing page.",
+    JSON.stringify([{ title: "Immediate", startSec: 0, endSec: 30, summary: "Immediate-only content." }]),
+    JSON.stringify({ recommendation: "listen_segments", reason: "Short fixture.", bestSegments: [{ startSec: 0, endSec: 30, reason: "Fixture segment." }] }),
+    JSON.stringify([{ name: "Immediate", type: "fixture", mentions: 1 }]),
+    "fixture",
+    "fixture"
+  );
+  const runId = repos.startProcessingRun({ watchId: watch.id, sources: ["https://www.xiaoyuzhoufm.com/episode/immediate-only"] });
+  repos.updateEpisodeProcessingStatus({
+    runId,
+    episodeId: episode.id,
+    sourceUrl: "https://www.xiaoyuzhoufm.com/episode/immediate-only",
+    stage: "exported",
+    status: "completed"
+  });
+  repos.completeProcessingRun(runId);
+}
+
+function seedMonitorOnlySummary(path: string): void {
+  const db = openPodcastNoteDb(path);
+  const repos = createRepositories(db);
+  const user = repos.upsertUser({ id: "user_local_preview", email: "local-preview@example.invalid", name: "Local Preview", timezone: "Asia/Shanghai" });
+  const workspace = repos.ensurePersonalWorkspaceForUser(user.id);
+  const watch = repos.createWatchForWorkspace(workspace.id, {
+    id: "watch_monitor_only_summary",
+    name: "Monitor-only task",
+    type: "topic",
+    query: "小宇宙 / Monitor-only / AI",
+    outputLanguage: "zh-CN",
+    includeTerms: ["AI"],
+    excludeTerms: [],
+    minRelevanceScore: 0.65,
+    frequency: "daily",
+    backfillDays: 3,
+    enabled: true
+  });
+  const episode = repos.upsertEpisode({
+    id: "ep_monitor_only_summary",
+    sourceId: undefined,
+    title: "Monitor-only Xiaoyuzhou episode",
+    description: "Fixture used to ensure monitor results do not leak into immediate results.",
+    durationSec: 120,
+    audioUrl: "https://example.invalid/monitor-only.mp3",
+    pageUrl: "https://www.xiaoyuzhoufm.com/episode/monitor-only",
+    language: "zh-CN"
+  });
+  repos.saveTranscript({
+    episodeId: episode.id,
+    provider: "fixture",
+    model: "fixture",
+    transcript: {
+      language: "zh-CN",
+      durationSec: 120,
+      segments: [{ startSec: 0, endSec: 30, text: "Monitor-only transcript segment." }]
+    }
+  });
+  db.query(`
+    insert into episode_summaries (
+      id, episode_id, output_language, one_liner, overview, chapters_json, worth_listening_json, entities_json, prompt_version, model
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    "sum_monitor_only",
+    episode.id,
+    "zh-CN",
+    "Monitor-only summary.",
+    "This result should appear only inside its monitor task.",
+    JSON.stringify([{ title: "Monitor", startSec: 0, endSec: 30, summary: "Monitor-only content." }]),
+    JSON.stringify({ recommendation: "listen_segments", reason: "Short fixture.", bestSegments: [{ startSec: 0, endSec: 30, reason: "Fixture segment." }] }),
+    JSON.stringify([{ name: "Monitor", type: "fixture", mentions: 1 }]),
+    "fixture",
+    "fixture"
+  );
+  const runId = repos.startProcessingRun({ watchId: watch.id, sources: ["小宇宙 Monitor-only AI"] });
+  repos.updateEpisodeProcessingStatus({
+    runId,
+    episodeId: episode.id,
+    sourceUrl: "小宇宙 Monitor-only AI",
+    stage: "exported",
+    status: "completed"
+  });
+  repos.completeProcessingRun(runId);
+}
+
+function seedEmptyMonitorRun(path: string): void {
+  const repos = createRepositories(openPodcastNoteDb(path));
+  const user = repos.upsertUser({ id: "user_local_preview", email: "local-preview@example.invalid", name: "Local Preview", timezone: "Asia/Shanghai" });
+  const workspace = repos.ensurePersonalWorkspaceForUser(user.id);
+  const watch = repos.createWatchForWorkspace(workspace.id, {
+    id: "watch_empty_monitor",
+    name: "Empty Monitor",
+    type: "topic",
+    query: "小宇宙 / 深思圈 / AI",
+    outputLanguage: "zh-CN",
+    includeTerms: ["AI"],
+    excludeTerms: [],
+    minRelevanceScore: 0.65,
+    frequency: "daily",
+    backfillDays: 3,
+    enabled: true
+  });
+  const runId = repos.startProcessingRun({ watchId: watch.id, sources: ["小宇宙 深思圈 AI"] });
+  repos.completeProcessingRun(runId);
 }

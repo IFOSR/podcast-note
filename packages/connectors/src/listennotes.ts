@@ -43,9 +43,26 @@ export const listenNotesConnector: SourceConnector = {
     const id = source.externalId ?? listenNotesId(source.url);
     if (!apiKey()) return [];
     if (!id) {
-      const data = await listenNotesJson("/search", { q: source.url, type: "episode", sort_by_date: "1" });
-      return ((data.results as Record<string, unknown>[] | undefined) ?? [])
-        .map((episode) => episodeFromListenNotes(episode, source))
+      const podcast = await podcastSearchResult(source.url);
+      if (!podcast) return [];
+      const podcastId = stringField(podcast, "id");
+      if (!podcastId) return [];
+      const resolvedSource = {
+        ...source,
+        externalId: podcastId,
+        title: stringField(podcast, "title_original") ?? stringField(podcast, "title") ?? source.title,
+        author: stringField(podcast, "publisher_original") ?? stringField(podcast, "publisher") ?? source.author,
+        imageUrl: stringField(podcast, "image") ?? source.imageUrl,
+        metadata: {
+          ...source.metadata,
+          resolver: "listennotes",
+          mode: "podcast-search",
+          query: source.url
+        }
+      };
+      const data = await listenNotesJson(`/podcasts/${encodeURIComponent(podcastId)}`, { sort: "recent_first" });
+      return (data.episodes ?? [])
+        .map((episode: Record<string, unknown>) => episodeFromListenNotes(episode, resolvedSource))
         .slice(0, options.limit ?? 10);
     }
     const data = await listenNotesJson(`/podcasts/${encodeURIComponent(id)}`, { sort: "recent_first" });
@@ -68,6 +85,12 @@ export const listenNotesConnector: SourceConnector = {
     return episodeFromListenNotes(await listenNotesJson(`/episodes/${encodeURIComponent(id)}`), { type: "listennotes", url: input });
   }
 };
+
+async function podcastSearchResult(query: string): Promise<Record<string, unknown> | undefined> {
+  const data = await listenNotesJson("/search", { q: query, type: "podcast", sort_by_date: "1" });
+  const results = (data.results as Record<string, unknown>[] | undefined) ?? [];
+  return results[0];
+}
 
 function episodeFromListenNotes(episode: Record<string, unknown>, source: ResolvedSource): ResolvedEpisode {
   const audioUrl = stringField(episode, "audio") ?? stringField(episode, "audio_url");
