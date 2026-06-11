@@ -1,43 +1,21 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createCodexInsightProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
 import { connectorFor } from "../../../packages/connectors/src/index.ts";
 import type { Episode } from "../../../packages/core/src/types.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
-import { demoWatch, episodeFromFixture, markdownReport, processTranscript, processTranscriptFixture, type TranscriptFixture } from "./pipeline.ts";
 import { processSources } from "./process-sources.ts";
 import { runM1Once } from "./m1-run-once.ts";
+import { consumeLarkBotAddedEvents, consumeLarkMessageEvents } from "./lark-bot-events.ts";
+import { createLarkBotClient, recordLarkBotInstalled } from "../../../packages/lark/src/index.ts";
+import { deliverPendingLarkEpisodeResultsToAllInstallations } from "./lark-delivery.ts";
 
 const command = process.argv[2] ?? "help";
 
 if (command === "demo") {
-  const fixturePath = resolve("evals/golden/ai-agent-sample-transcript.json");
-  const fixture = await loadFixture(fixturePath);
-  const watch = demoWatch();
-  const result = await processTranscriptFixture({
-    workspaceId: watch.workspaceId,
-    watch,
-    episode: episodeFromFixture(fixture),
-    transcriptSegments: fixture.transcript
-  });
-  console.log(markdownReport(result, watch));
+  fail("The demo command is disabled because runtime commands must not use mock providers. Use process-sources, transcribe-url, or m1:run-once with real provider credentials.");
 } else if (command === "process-transcript") {
-  const fixturePath = process.argv[3];
-  if (!fixturePath) {
-    fail("Usage: bun apps/worker/src/cli.ts process-transcript <fixture.json>");
-  }
-  const fixture = await loadFixture(resolve(fixturePath));
-  const watch = demoWatch();
-  const result = await processTranscript(
-    {
-      workspaceId: watch.workspaceId,
-      watch,
-      episode: episodeFromFixture(fixture),
-      transcriptSegments: fixture.transcript
-    },
-    codexInsightProviderOrFail()
-  );
-  console.log(markdownReport(result, watch));
+  fail("process-transcript is disabled because it reads local transcript fixtures. Use transcribe-url or process-sources so ASR runs through the real Volcengine provider.");
 } else if (command === "transcribe-url") {
   const inputUrl = process.argv[3];
   if (!inputUrl) {
@@ -155,10 +133,103 @@ if (command === "demo") {
       repositories: createRepositories(openPodcastNoteDb(dbPath)),
       workspaceId: flagValue("--workspace-id"),
       now: flagValue("--now"),
+      transcriptProvider: volcengineTranscriptProviderOrFail(),
+      insightProvider: codexInsightProviderOrFail(),
       pollingEpisodeLimit: numberFlagValue("--polling-limit"),
       processingLimit: numberFlagValue("--processing-limit")
     });
     console.log(JSON.stringify({ ok: true, dbPath, ...result }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "lark:events") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"];
+    const appId = flagValue("--app-id") ?? process.env["LARK_APP_ID"] ?? process.env["FEISHU_APP_ID"];
+    const appSecret = process.env["LARK_APP_SECRET"] ?? process.env["FEISHU_APP_SECRET"];
+    if (!workspaceId) fail("Usage: bun apps/worker/src/cli.ts lark:events --workspace-id <workspace_id> [--db storage/podcast-note.sqlite]");
+    if (!appId) fail("Missing LARK_APP_ID or FEISHU_APP_ID.");
+    if (!appSecret) fail("Missing LARK_APP_SECRET or FEISHU_APP_SECRET.");
+    const eventKey = flagValue("--event-key");
+    if (eventKey === "im.chat.member.bot.added_v1") {
+      await consumeLarkBotAddedEvents({
+        dbPath,
+        workspaceId,
+        appId,
+        appSecret,
+        eventKey
+      });
+      process.exit(0);
+    }
+    await consumeLarkMessageEvents({
+      dbPath,
+      workspaceId,
+      appId,
+      appSecret,
+      tenantKey: "tenant_personal",
+      eventKey: eventKey ?? "im.message.receive_v1"
+    });
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "lark:deliver-pending") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"];
+    const appId = flagValue("--app-id") ?? process.env["LARK_APP_ID"] ?? process.env["FEISHU_APP_ID"];
+    const appSecret = process.env["LARK_APP_SECRET"] ?? process.env["FEISHU_APP_SECRET"];
+    if (!workspaceId) fail("Usage: bun apps/worker/src/cli.ts lark:deliver-pending --workspace-id <workspace_id> [--db storage/podcast-note.sqlite]");
+    if (!appId) fail("Missing LARK_APP_ID or FEISHU_APP_ID.");
+    if (!appSecret) fail("Missing LARK_APP_SECRET or FEISHU_APP_SECRET.");
+    const repositories = createRepositories(openPodcastNoteDb(dbPath));
+    const installations = repositories.listActiveLarkBotInstallationsForWorkspace(workspaceId, appId);
+    if (installations.length === 0) fail(`No active Lark bot installation found for workspace ${workspaceId}.`);
+    const result = await deliverPendingLarkEpisodeResultsToAllInstallations({
+      repositories,
+      clientFactory: () => createLarkBotClient({ appId, appSecret }),
+      workspaceId,
+      appId,
+      limit: numberFlagValue("--limit") ?? 50
+    });
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "lark:bind-chat") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"];
+    const appId = flagValue("--app-id") ?? process.env["LARK_APP_ID"] ?? process.env["FEISHU_APP_ID"];
+    const chatId = flagValue("--chat-id");
+    const chatName = flagValue("--chat-name") ?? "个人播客助手";
+    const tenantKey = flagValue("--tenant-key") ?? "tenant_personal";
+    const operatorOpenId = flagValue("--operator-open-id");
+    if (!workspaceId) fail("Usage: bun apps/worker/src/cli.ts lark:bind-chat --workspace-id <workspace_id> --chat-id <oc_chat_id> [--db storage/podcast-note.sqlite]");
+    if (!appId) fail("Missing LARK_APP_ID or FEISHU_APP_ID.");
+    if (!chatId) fail("Missing --chat-id.");
+    const repositories = createRepositories(openPodcastNoteDb(dbPath));
+    const installation = recordLarkBotInstalled({
+      repositories,
+      workspaceId,
+      appId,
+      tenantKey,
+      chatId,
+      chatName,
+      operatorOpenId
+    });
+    console.log(JSON.stringify({ ok: true, dbPath, installation }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "lark:ws-check") {
+  try {
+    const appId = flagValue("--app-id") ?? process.env["LARK_APP_ID"] ?? process.env["FEISHU_APP_ID"];
+    const appSecret = process.env["LARK_APP_SECRET"] ?? process.env["FEISHU_APP_SECRET"];
+    if (!appId) fail("Missing LARK_APP_ID or FEISHU_APP_ID.");
+    if (!appSecret) fail("Missing LARK_APP_SECRET or FEISHU_APP_SECRET.");
+    const result = await checkLarkWebSocketEndpoint({ appId, appSecret });
+    console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -168,25 +239,20 @@ if (command === "demo") {
       "Podcast Note worker CLI",
       "",
       "Commands:",
-      "  demo",
-      "  process-transcript <fixture.json>",
+      "  demo  # disabled; mock providers are not allowed in runtime commands",
+      "  process-transcript <fixture.json>  # disabled; use real ASR commands instead",
       "  resolve-audio-url <public-audio-or-episode-url>",
       "  transcribe-url <public-audio-or-episode-url>",
       "  query <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 20] [--format json] [--watch-id id] [--episode-id id]",
       "  export <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json] [--watch-id id] [--episode-id id]",
       "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs] [--db storage/podcast-note.sqlite]",
-      "  m1:run-once [--db storage/podcast-note.sqlite] [--workspace-id id] [--now ISO] [--polling-limit 100] [--processing-limit 10]"
+      "  m1:run-once [--db storage/podcast-note.sqlite] [--workspace-id id] [--now ISO] [--polling-limit 100] [--processing-limit 10]",
+      "  lark:events [--db storage/podcast-note.sqlite] --workspace-id id [--event-key im.chat.member.bot.added_v1]",
+      "  lark:ws-check",
+      "  lark:bind-chat [--db storage/podcast-note.sqlite] --workspace-id id --chat-id oc_xxx",
+      "  lark:deliver-pending [--db storage/podcast-note.sqlite] --workspace-id id [--limit 50]"
     ].join("\n")
   );
-}
-
-async function loadFixture(path: string): Promise<TranscriptFixture> {
-  const raw = await readFile(path, "utf8");
-  const parsed = JSON.parse(raw) as TranscriptFixture;
-  if (!parsed.episode?.title || !parsed.episode?.pageUrl || !Array.isArray(parsed.transcript)) {
-    throw new Error(`Invalid transcript fixture: ${path}`);
-  }
-  return parsed;
 }
 
 function printRows(rows: unknown, format: string): void {
@@ -279,6 +345,42 @@ function flagValue(name: string): string | undefined {
   const value = process.argv[index + 1];
   if (!value || value.startsWith("--")) fail(`Missing value for ${name}.`);
   return value;
+}
+
+async function checkLarkWebSocketEndpoint(input: { appId: string; appSecret: string }) {
+  const response = await fetch("https://open.feishu.cn/callback/ws/endpoint", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "locale": "zh"
+    },
+    body: JSON.stringify({
+      AppID: input.appId,
+      AppSecret: input.appSecret
+    })
+  });
+  const json = await response.json() as {
+    code?: number;
+    msg?: string;
+    data?: {
+      URL?: string;
+      ClientConfig?: unknown;
+    };
+  };
+  const parsed = json.data?.URL ? new URL(json.data.URL) : undefined;
+  return {
+    ok: response.ok && json.code === 0 && Boolean(parsed),
+    status: response.status,
+    code: json.code,
+    msg: json.msg,
+    ws: parsed ? {
+      protocol: parsed.protocol,
+      host: parsed.host,
+      pathname: parsed.pathname,
+      queryKeys: [...parsed.searchParams.keys()]
+    } : undefined,
+    clientConfig: json.data?.ClientConfig
+  };
 }
 
 function numberFlagValue(name: string): number | undefined {

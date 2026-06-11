@@ -1,4 +1,5 @@
-import { createCodexInsightProvider, createVolcengineTranscriptProvider, mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/index.ts";
+import { createCodexInsightProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
+import { mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/mock-provider.ts";
 import { connectorFor, parseRss } from "../../../packages/connectors/src/index.ts";
 import { episodeDedupeKey } from "../../../packages/core/src/dedupe.ts";
 import { formatTimestamp } from "../../../packages/core/src/format.ts";

@@ -7,10 +7,12 @@ const dir = mkdtempSync(join(tmpdir(), "podcast-note-start-script-"));
 const pidFile = join(dir, "podcast-note.pid");
 const logFile = join(dir, "podcast-note.log");
 const dbPath = join(dir, "podcast-note.sqlite");
-const port = 51877;
+const port = 52000 + Math.floor(Math.random() * 1000);
 
 try {
   const baseArgs = ["scripts/podcast-note", "--pid-file", pidFile, "--log-file", logFile, "--db", dbPath, "--port", String(port)];
+  const help = run(["scripts/podcast-note", "--help"], true);
+  assert(help.output.includes("Default: im.message.receive_v1"), `expected personal message event default, got ${help.output}`);
 
   const initialStatus = run([...baseArgs, "status"], false);
   assert(initialStatus.status !== 0, "status should fail when the service is not running");
@@ -48,7 +50,15 @@ try {
 }
 
 function run(args: string[], expectSuccess: boolean): { status: number; output: string } {
-  const result = spawnSync("bash", args, { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${process.env["HOME"]}/.bun/bin:${process.env["PATH"]}` } });
+  const result = spawnSync("bash", args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${process.env["HOME"]}/.bun/bin:${process.env["PATH"]}`,
+      PODCAST_NOTE_DISABLE_LARK_EVENTS: "1"
+    }
+  });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   if (expectSuccess && result.status !== 0) {
     throw new Error(`Command failed (${result.status}): bash ${args.join(" ")}\n${output}`);

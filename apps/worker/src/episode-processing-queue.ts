@@ -1,5 +1,4 @@
 import type { InsightProvider, TranscriptProvider } from "../../../packages/ai/src/index.ts";
-import { mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/index.ts";
 import type { createRepositories } from "../../../packages/db/src/repositories.ts";
 import { processTranscript } from "./pipeline.ts";
 
@@ -20,8 +19,14 @@ export type EpisodeProcessingQueueResult = {
 };
 
 export async function runEpisodeProcessingQueue(input: EpisodeProcessingQueueInput): Promise<EpisodeProcessingQueueResult> {
-  const transcriptProvider = input.transcriptProvider ?? mockTranscriptProvider;
-  const insightProvider = input.insightProvider ?? mockInsightProvider;
+  if (!input.transcriptProvider) {
+    throw new Error("Episode processing requires a real transcript provider. Mock fallback is disabled.");
+  }
+  if (!input.insightProvider) {
+    throw new Error("Episode processing requires a real insight provider. Mock fallback is disabled.");
+  }
+  const transcriptProvider = input.transcriptProvider;
+  const insightProvider = input.insightProvider;
   const jobs = input.repositories.listQueuedEpisodeProcessingJobs({ limit: input.limit ?? 10 });
   let processedCount = 0;
   let failedCount = 0;

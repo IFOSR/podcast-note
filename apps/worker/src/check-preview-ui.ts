@@ -147,6 +147,36 @@ try {
   assertIncludes(emptyRunMonitorPage, "没有产出内容", "无产出的回看需要明确告诉用户没有产出。");
   assertIncludes(emptyRunMonitorPage, "请优先提供频道页、RSS 或单集链接", "无产出的回看需要给出下一步修正建议。");
 
+  seedFailedMonitorRun(dbPath);
+  const failedRunMonitorPage = fetchText(`${url}/monitor`);
+  assertIncludes(failedRunMonitorPage, "Failed Monitor", "失败的监控任务也应该展示任务卡片。");
+  assertIncludes(failedRunMonitorPage, ">重试失败项</button>", "失败的监控任务需要提供批量重试入口。");
+  assertIncludes(failedRunMonitorPage, ">重新处理本集</button>", "失败的单集需要提供单集重试入口。");
+  assertIncludes(failedRunMonitorPage, "失败处理：系统会按阶段和音频时长判断是否卡死", "真正失败的监控任务需要展示失败处理说明。");
+
+  seedRetriedRunningMonitorRun(dbPath);
+  const retriedRunningMonitorPage = fetchText(`${url}/monitor`);
+  const retriedRunningSection = sectionFor(retriedRunningMonitorPage, "Retried Running Monitor");
+  assertIncludes(retriedRunningSection, "正在转写音频中", "重试后的运行中单集应展示当前运行状态。");
+  assertIncludes(retriedRunningSection, "当前单集正在处理中", "运行中的监控任务应说明当前还在处理。");
+  assertNotIncludes(retriedRunningSection, "失败处理：", "历史失败已经重试后，不应继续把当前状态渲染成失败处理。");
+  assertNotIncludes(retriedRunningSection, ">重试失败项</button>", "运行中的监控任务不应展示批量重试失败入口。");
+  assertNotIncludes(retriedRunningSection, "请优先提供频道页、RSS 或单集链接", "运行中的监控任务无产出时不应误导用户认为目标无法解析。");
+
+  const retryEpisodeResponse = postForm(`${url}/api/watch-action`, {
+    watchId: "watch_failed_monitor",
+    action: "retry-episode",
+    episodeId: "ep_failed_monitor"
+  });
+  if (!retryEpisodeResponse.includes("/monitor")) {
+    throw new Error(`单集重试后应重定向回监控页，got ${retryEpisodeResponse}`);
+  }
+  const retryRepos = createRepositories(openPodcastNoteDb(dbPath));
+  const retriedJob = retryRepos.getEpisodeProcessingJob("epjob_failed_monitor");
+  if (retriedJob?.status !== "queued") {
+    throw new Error(`单集重试后 job 应重新入队，got ${JSON.stringify(retriedJob)}.`);
+  }
+
   seedProcessedEpisode(dbPath);
   const reportHome = fetchText(url);
   assertIncludes(reportHome, "音频核验", "结果报告需要提供音频核验入口。");
@@ -247,6 +277,13 @@ function assertIncludes(haystack: string, needle: string, message: string): void
 
 function assertNotIncludes(haystack: string, needle: string, message: string): void {
   if (haystack.includes(needle)) throw new Error(message);
+}
+
+function sectionFor(html: string, marker: string): string {
+  const start = html.indexOf(marker);
+  if (start < 0) throw new Error(`Expected page to include section marker: ${marker}`);
+  const next = html.indexOf("<details class=\"watch\"", start + marker.length);
+  return next < 0 ? html.slice(start) : html.slice(start, next);
 }
 
 function seedProcessedEpisode(path: string): void {
@@ -457,4 +494,144 @@ function seedEmptyMonitorRun(path: string): void {
   });
   const runId = repos.startProcessingRun({ watchId: watch.id, sources: ["小宇宙 深思圈 AI"] });
   repos.completeProcessingRun(runId);
+}
+
+function seedFailedMonitorRun(path: string): void {
+  const db = openPodcastNoteDb(path);
+  const repos = createRepositories(db);
+  const user = repos.upsertUser({ id: "user_local_preview", email: "local-preview@example.invalid", name: "Local Preview", timezone: "Asia/Shanghai" });
+  const workspace = repos.ensurePersonalWorkspaceForUser(user.id);
+  const watch = repos.createWatchForWorkspace(workspace.id, {
+    id: "watch_failed_monitor",
+    name: "Failed Monitor",
+    type: "topic",
+    query: "小宇宙 / Failed Monitor / AI",
+    outputLanguage: "zh-CN",
+    includeTerms: ["AI"],
+    excludeTerms: [],
+    minRelevanceScore: 0.65,
+    frequency: "daily",
+    backfillDays: 3,
+    enabled: true
+  });
+  const episode = repos.upsertEpisode({
+    id: "ep_failed_monitor",
+    title: "Failed monitor episode",
+    pageUrl: "https://example.invalid/failed-monitor",
+    audioUrl: "https://example.invalid/failed-monitor.mp3"
+  });
+  db.query(`
+    insert into processing_runs (id, watch_id, input_sources_json, status, started_at, finished_at, error)
+    values (?, ?, ?, 'failed', ?, ?, ?)
+  `).run(
+    "run_failed_monitor",
+    watch.id,
+    JSON.stringify([episode.pageUrl]),
+    "2026-06-08 00:00:00",
+    "2026-06-08 00:30:00",
+    "Unable to connect. Automatic retry limit reached."
+  );
+  db.query(`
+    insert into episode_processing_jobs (
+      id, workspace_id, watch_id, episode_id, source_url, status, attempts,
+      relevance_reason_json, processing_run_id, error, queued_at, started_at, finished_at, updated_at
+    ) values (?, ?, ?, ?, ?, 'failed', 3, '{}', ?, ?, ?, ?, ?, ?)
+  `).run(
+    "epjob_failed_monitor",
+    workspace.id,
+    watch.id,
+    episode.id,
+    episode.pageUrl,
+    "run_failed_monitor",
+    "Unable to connect. Automatic retry limit reached.",
+    "2026-06-08T00:00:00.000Z",
+    "2026-06-08 00:00:00",
+    "2026-06-08 00:30:00",
+    "2026-06-08 00:30:00"
+  );
+  repos.updateEpisodeProcessingStatus({
+    runId: "run_failed_monitor",
+    episodeId: episode.id,
+    sourceUrl: episode.pageUrl,
+    stage: "failed",
+    status: "failed",
+    error: "Unable to connect. Automatic retry limit reached."
+  });
+}
+
+function seedRetriedRunningMonitorRun(path: string): void {
+  const db = openPodcastNoteDb(path);
+  const repos = createRepositories(db);
+  const user = repos.upsertUser({ id: "user_local_preview", email: "local-preview@example.invalid", name: "Local Preview", timezone: "Asia/Shanghai" });
+  const workspace = repos.ensurePersonalWorkspaceForUser(user.id);
+  const watch = repos.createWatchForWorkspace(workspace.id, {
+    id: "watch_retried_running_monitor",
+    name: "Retried Running Monitor",
+    type: "topic",
+    query: "小宇宙 / Retried Running Monitor / AI",
+    outputLanguage: "zh-CN",
+    includeTerms: ["AI"],
+    excludeTerms: [],
+    minRelevanceScore: 0.65,
+    frequency: "daily",
+    backfillDays: 3,
+    enabled: true
+  });
+  const episode = repos.upsertEpisode({
+    id: "ep_retried_running_monitor",
+    title: "Retried running episode",
+    pageUrl: "https://example.invalid/retried-running-monitor",
+    audioUrl: "https://example.invalid/retried-running-monitor.mp3"
+  });
+  db.query(`
+    insert into processing_runs (id, watch_id, input_sources_json, status, started_at, finished_at, error)
+    values (?, ?, ?, 'failed', ?, ?, ?)
+  `).run(
+    "run_retried_running_old_failed",
+    watch.id,
+    JSON.stringify([episode.pageUrl]),
+    "2026-06-08 00:00:00",
+    "2026-06-08 00:10:00",
+    "Processing worker exceeded its stage timeout and was requeued."
+  );
+  repos.updateEpisodeProcessingStatus({
+    runId: "run_retried_running_old_failed",
+    episodeId: episode.id,
+    sourceUrl: episode.pageUrl,
+    stage: "failed",
+    status: "failed",
+    error: "Processing worker exceeded its stage timeout and was requeued."
+  });
+  db.query(`
+    insert into processing_runs (id, watch_id, input_sources_json, status, started_at)
+    values (?, ?, ?, 'running', ?)
+  `).run(
+    "run_retried_running_current",
+    watch.id,
+    JSON.stringify([episode.pageUrl]),
+    "2026-06-08 00:12:00"
+  );
+  db.query(`
+    insert into episode_processing_jobs (
+      id, workspace_id, watch_id, episode_id, source_url, status, attempts,
+      relevance_reason_json, processing_run_id, error, queued_at, started_at, updated_at
+    ) values (?, ?, ?, ?, ?, 'running', 2, '{}', ?, null, ?, ?, ?)
+  `).run(
+    "epjob_retried_running_monitor",
+    workspace.id,
+    watch.id,
+    episode.id,
+    episode.pageUrl,
+    "run_retried_running_current",
+    "2026-06-08T00:12:00.000Z",
+    "2026-06-08 00:12:00",
+    "2026-06-08 00:12:00"
+  );
+  repos.updateEpisodeProcessingStatus({
+    runId: "run_retried_running_current",
+    episodeId: episode.id,
+    sourceUrl: episode.pageUrl,
+    stage: "transcribing",
+    status: "running"
+  });
 }

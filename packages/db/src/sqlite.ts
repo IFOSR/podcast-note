@@ -29,6 +29,7 @@ export function migrate(db: PodcastNoteDb): void {
   if (existing) {
     ensureM1WorkspaceSchema(db);
     ensureProcessingStatusSchema(db);
+    ensureLarkAuthSchema(db);
     return;
   }
 
@@ -40,6 +41,7 @@ export function migrate(db: PodcastNoteDb): void {
   apply();
   ensureM1WorkspaceSchema(db);
   ensureProcessingStatusSchema(db);
+  ensureLarkAuthSchema(db);
 }
 
 function ensureM1WorkspaceSchema(db: PodcastNoteDb): void {
@@ -196,5 +198,83 @@ function ensureProcessingStatusSchema(db: PodcastNoteDb): void {
 
     create index if not exists processing_episode_statuses_episode_idx
       on processing_episode_statuses (episode_id, updated_at desc);
+  `);
+}
+
+function ensureLarkAuthSchema(db: PodcastNoteDb): void {
+  db.exec(`
+    create table if not exists lark_bind_sessions (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      agent_id text not null,
+      state_hash text not null unique,
+      permission_package text not null,
+      terminal_fingerprint text,
+      status text not null check (status in ('pending', 'completed', 'expired', 'failed')),
+      connection_id text,
+      verification_url text not null,
+      expires_at text not null,
+      created_at text not null,
+      completed_at text,
+      error text
+    );
+
+    create index if not exists lark_bind_sessions_workspace_created_idx
+      on lark_bind_sessions (workspace_id, created_at desc);
+
+    create table if not exists lark_connections (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      agent_id text not null,
+      tenant_key text not null,
+      open_id text not null,
+      union_id text,
+      user_name text,
+      permission_package text not null,
+      encrypted_access_token text not null,
+      encrypted_refresh_token text not null,
+      access_token_expires_at text not null,
+      refresh_token_expires_at text,
+      status text not null default 'active' check (status in ('active', 'reauth_required', 'revoked')),
+      created_at text not null,
+      updated_at text not null,
+      revoked_at text
+    );
+
+    create index if not exists lark_connections_workspace_updated_idx
+      on lark_connections (workspace_id, updated_at desc);
+
+    create table if not exists lark_bot_installations (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      app_id text not null,
+      tenant_key text not null,
+      chat_id text not null,
+      chat_name text,
+      operator_open_id text,
+      status text not null default 'active' check (status in ('active', 'disabled')),
+      installed_at text not null,
+      updated_at text not null,
+      disabled_at text,
+      unique(workspace_id, app_id, chat_id)
+    );
+
+    create index if not exists lark_bot_installations_workspace_updated_idx
+      on lark_bot_installations (workspace_id, updated_at desc);
+
+    create table if not exists lark_delivery_records (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      watch_id text not null references watches(id) on delete cascade,
+      episode_id text not null references episodes(id) on delete cascade,
+      chat_id text not null,
+      delivery_type text not null check (delivery_type in ('episode_summary')),
+      provider_message_id text not null,
+      delivered_at text not null,
+      unique(workspace_id, watch_id, episode_id, chat_id, delivery_type)
+    );
+
+    create index if not exists lark_delivery_records_workspace_delivered_idx
+      on lark_delivery_records (workspace_id, delivered_at desc);
   `);
 }

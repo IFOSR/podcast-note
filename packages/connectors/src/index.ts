@@ -16,5 +16,5 @@ export function connectorFor(input: string): SourceConnector {
 export type { ListEpisodeOptions, ResolvedEpisode, ResolvedSource, SourceConnector } from "./types.ts";
 export { manualConnector, normalizeAudioUrl } from "./manual.ts";
 export { listenNotesConnector } from "./listennotes.ts";
-export { appleConnector, spotifyConnector, xiaoyuzhouConnector, youtubeConnector } from "./platform.ts";
+export { appleConnector, spotifyConnector, xiaoyuzhouConnector, xiaoyuzhouEpisodesFromHtml, xiaoyuzhouPodcastTitleFromHtml, youtubeConnector } from "./platform.ts";
 export { parseRss, rssConnector } from "./rss.ts";

@@ -27,9 +27,16 @@
     "check:daily-brief": "bun apps/worker/src/check-daily-brief.ts",
     "check:inbox-feedback-detail": "bun apps/worker/src/check-inbox-feedback-detail.ts",
     "check:auth-usage": "bun apps/worker/src/check-auth-usage.ts",
+    "check:no-runtime-mock": "bun apps/worker/src/check-no-runtime-mock-fallback.ts",
     "check:web-m15": "bun apps/worker/src/check-web-m15.ts",
     "check:m1-run-once": "bun apps/worker/src/check-m1-run-once.ts",
     "check:start-script": "bun apps/worker/src/check-start-script.ts",
+    "check:lark-bot-integration": "bun apps/worker/src/check-lark-bot-integration.ts",
+    "check:lark-bot-events": "bun apps/worker/src/check-lark-bot-events.ts",
+    "check:lark-message-consumer": "bun apps/worker/src/check-lark-message-consumer.ts",
+    "check:lark-delivery": "bun apps/worker/src/check-lark-delivery.ts",
+    "check:lark-unified-auth": "bun apps/worker/src/check-lark-unified-auth.ts",
+    "check:lark-preview-auth": "bun apps/worker/src/check-lark-preview-auth.ts",
     "check:preview-ui": "bun apps/worker/src/check-preview-ui.ts"
   },
   "workspaces": [
@@ -39,5 +46,9 @@
   "engines": {
     "node": ">=22.0.0",
     "bun": ">=1.3.0"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.66.1",
+    "qrcode": "^1.5.4"
   }
 }

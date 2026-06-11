@@ -1,4 +1,4 @@
-import { connectorFor, connectors, listenNotesConnector, normalizeAudioUrl, xiaoyuzhouConnector } from "../../../packages/connectors/src/index.ts";
+import { connectorFor, connectors, listenNotesConnector, normalizeAudioUrl, xiaoyuzhouConnector, xiaoyuzhouEpisodesFromHtml, xiaoyuzhouPodcastTitleFromHtml } from "../../../packages/connectors/src/index.ts";
 
 const routes = [
   ["https://example.com/feed.xml", "rss"],
@@ -29,6 +29,21 @@ const ximalayaWrappedAudio =
 const ximalayaDirectAudio = normalizeAudioUrl(ximalayaWrappedAudio);
 if (ximalayaDirectAudio !== "https://aod.cos.tx.xmcdn.com/storages/0d4a-audiofreehighqps/A6/61/GKwRIUEN0khwAeae5gSVnIMT.m4a") {
   throw new Error(`Expected Ximalaya wrapped audio to normalize to direct media URL, got ${ximalayaDirectAudio}.`);
+}
+
+const xiaoyuzhouPodcastHtml = `
+<script>{"type":"EPISODE","title":"Episode","podcast":{"title":"硅谷101","image":{"picUrl":"https://example.invalid/pic.jpg"}}}</script>
+`;
+if (xiaoyuzhouPodcastTitleFromHtml(xiaoyuzhouPodcastHtml) !== "硅谷101") {
+  throw new Error("Xiaoyuzhou podcast title parser should extract the channel title from episode metadata.");
+}
+
+const xiaoyuzhouWrappedAudioHtml = `
+<script>{"type":"EPISODE","eid":"wrapped-audio","title":"Wrapped Audio","enclosure":{"url":"${ximalayaWrappedAudio}"},"podcast":{"title":"AI炼金术"}}</script>
+`;
+const [xiaoyuzhouWrappedAudioEpisode] = xiaoyuzhouEpisodesFromHtml(xiaoyuzhouWrappedAudioHtml, "https://www.xiaoyuzhoufm.com/podcast/fixture");
+if (xiaoyuzhouWrappedAudioEpisode?.audioUrl !== ximalayaDirectAudio) {
+  throw new Error(`Xiaoyuzhou episodes should normalize wrapped Ximalaya audio URLs, got ${xiaoyuzhouWrappedAudioEpisode?.audioUrl}.`);
 }
 
 const originalKey = process.env["LISTEN_NOTES_API_KEY"];

@@ -1,7 +1,8 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mockInsightProvider, type TranscriptProvider } from "../../../packages/ai/src/index.ts";
+import type { TranscriptProvider } from "../../../packages/ai/src/index.ts";
+import { mockInsightProvider } from "../../../packages/ai/src/mock-provider.ts";
 import { stableId } from "../../../packages/core/src/format.ts";
 import type { Episode, Watch } from "../../../packages/core/src/types.ts";
 import { openPodcastNoteDb, createRepositories } from "../../../packages/db/src/index.ts";

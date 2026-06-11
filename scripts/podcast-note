@@ -7,13 +7,21 @@ cd "$ROOT_DIR"
 PID_FILE="$ROOT_DIR/.podcast-note.pid"
 LOG_FILE="$ROOT_DIR/.podcast-note.log"
 DB_PATH="$ROOT_DIR/storage/podcast-note.sqlite"
+LARK_CLI_HOME="$ROOT_DIR/.runtime/lark-cli-home"
+LARK_PID_FILE=""
+LARK_LOG_FILE=""
 HOST="127.0.0.1"
 PORT="3000"
 COMMAND=""
+WORKSPACE_ID="${PODCAST_NOTE_WORKSPACE_ID:-}"
+EVENT_KEY="im.message.receive_v1"
+EVENT_KEY_SET="false"
+LIMIT="50"
+CHAT_ID=""
 
 usage() {
   cat <<USAGE
-Usage: scripts/podcast-note [options] <start|stop|restart|status|logs|run-once>
+Usage: scripts/podcast-note [options] <start|stop|restart|status|logs|run-once|events|bind-chat|deliver-pending>
 
 Options:
   --host <host>        Host for preview server. Default: 127.0.0.1
@@ -21,41 +29,89 @@ Options:
   --db <path>          SQLite database path. Default: storage/podcast-note.sqlite
   --pid-file <path>    PID file path. Default: .podcast-note.pid
   --log-file <path>    Log file path. Default: .podcast-note.log
+  --lark-pid-file <path>
+                       Lark event consumer pid file. Default: derived from --pid-file
+  --lark-log-file <path>
+                       Lark event consumer log file. Default: derived from --log-file
+  --workspace-id <id>  Workspace id for event consumers.
+  --event-key <key>    Lark event key. Default: im.message.receive_v1
+  --chat-id <oc_xxx>   Lark chat id for manual binding fallback.
+  --limit <n>          Limit for pending delivery. Default: 50
 
 Examples:
   scripts/podcast-note start
   scripts/podcast-note status
   scripts/podcast-note run-once
   scripts/podcast-note restart --port 3001
+  scripts/podcast-note events --workspace-id <workspace_id>
+  scripts/podcast-note bind-chat --workspace-id <workspace_id> --chat-id <oc_xxx>
+  scripts/podcast-note deliver-pending --workspace-id <workspace_id>
   scripts/podcast-note stop
 USAGE
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    start|stop|restart|status|logs|run-once)
+    start|stop|restart|status|logs|run-once|events|bind-chat|deliver-pending)
       COMMAND="$1"
       shift
+      continue
       ;;
     --host)
       HOST="${2:?--host requires a value}"
       shift 2
+      continue
       ;;
     --port)
       PORT="${2:?--port requires a value}"
       shift 2
+      continue
       ;;
     --db)
       DB_PATH="${2:?--db requires a value}"
       shift 2
+      continue
       ;;
     --pid-file)
       PID_FILE="${2:?--pid-file requires a value}"
       shift 2
+      continue
       ;;
     --log-file)
       LOG_FILE="${2:?--log-file requires a value}"
       shift 2
+      continue
+      ;;
+    --lark-pid-file)
+      LARK_PID_FILE="${2:?--lark-pid-file requires a value}"
+      shift 2
+      continue
+      ;;
+    --lark-log-file)
+      LARK_LOG_FILE="${2:?--lark-log-file requires a value}"
+      shift 2
+      continue
+      ;;
+    --workspace-id)
+      WORKSPACE_ID="${2:?--workspace-id requires a value}"
+      shift 2
+      continue
+      ;;
+    --event-key)
+      EVENT_KEY="${2:?--event-key requires a value}"
+      EVENT_KEY_SET="true"
+      shift 2
+      continue
+      ;;
+    --chat-id)
+      CHAT_ID="${2:?--chat-id requires a value}"
+      shift 2
+      continue
+      ;;
+    --limit)
+      LIMIT="${2:?--limit requires a value}"
+      shift 2
+      continue
       ;;
     -h|--help)
       usage
@@ -70,6 +126,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 COMMAND="${COMMAND:-status}"
+LARK_PID_FILE="${LARK_PID_FILE:-${PID_FILE%.pid}.lark-events.pid}"
+LARK_LOG_FILE="${LARK_LOG_FILE:-${LOG_FILE%.log}.lark-events.log}"
 export PATH="$HOME/.bun/bin:$PATH"
 
 load_env() {
@@ -89,16 +147,101 @@ is_running() {
   kill -0 "$pid" 2>/dev/null
 }
 
+is_lark_running() {
+  local detected_pids
+  detected_pids="$(lark_worker_pids)"
+  if [[ -n "$detected_pids" ]]; then
+    printf "%s\n" "$detected_pids" | head -n 1 > "$LARK_PID_FILE"
+    return 0
+  fi
+  local pid
+  [[ -f "$LARK_PID_FILE" ]] || return 1
+  pid="$(cat "$LARK_PID_FILE" 2>/dev/null || true)"
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+lark_worker_pids() {
+  local pids=""
+  if command -v pgrep >/dev/null 2>&1; then
+    pids="$(pgrep -f "apps/worker/src/cli.ts lark:events.*--workspace-id $WORKSPACE_ID.*--event-key $EVENT_KEY" 2>/dev/null || true)"
+  fi
+  if [[ -z "$pids" ]] && command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -t "$LARK_LOG_FILE" 2>/dev/null || true)"
+  fi
+  printf "%s\n" "$pids" | awk 'NF && !seen[$0]++'
+}
+
+health_ok() {
+  curl -fsS "http://$HOST:$PORT/health" >/dev/null 2>&1
+}
+
+infer_workspace_id() {
+  [[ -f "$DB_PATH" ]] || return 0
+  command -v sqlite3 >/dev/null 2>&1 || return 0
+  sqlite3 "$DB_PATH" "select id from workspaces order by updated_at desc, created_at desc limit 1;" 2>/dev/null || true
+}
+
+ensure_workspace_id() {
+  WORKSPACE_ID="${WORKSPACE_ID:-${PODCAST_NOTE_WORKSPACE_ID:-}}"
+  if [[ -z "$WORKSPACE_ID" ]]; then
+    WORKSPACE_ID="$(infer_workspace_id)"
+  fi
+}
+
+lark_configured() {
+  [[ -n "${LARK_APP_ID:-${FEISHU_APP_ID:-}}" && -n "${LARK_APP_SECRET:-${FEISHU_APP_SECRET:-}}" ]]
+}
+
+ensure_lark_cli_config() {
+  local app_id="${LARK_APP_ID:-${FEISHU_APP_ID:-}}"
+  local app_secret="${LARK_APP_SECRET:-${FEISHU_APP_SECRET:-}}"
+  local config_file="$LARK_CLI_HOME/.lark-cli/config.json"
+  if [[ -f "$config_file" ]]; then
+    return 0
+  fi
+  mkdir -p "$LARK_CLI_HOME"
+  printf "%s" "$app_secret" | HOME="$LARK_CLI_HOME" lark-cli config init --app-id "$app_id" --app-secret-stdin --brand feishu >/dev/null
+}
+
+listener_pids() {
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -tiTCP:"$PORT" -sTCP:LISTEN -n -P 2>/dev/null || true
+}
+
+adopt_running_server() {
+  health_ok || return 1
+  local pids
+  pids="$(listener_pids)"
+  local pid
+  pid="$(printf "%s\n" "$pids" | head -n 1)"
+  if [[ -n "$pid" ]]; then
+    echo "$pid" > "$PID_FILE"
+    echo "Podcast Note is already running without a valid pid file; adopted pid=$pid, url=http://$HOST:$PORT"
+  else
+    echo "Podcast Note is already running at http://$HOST:$PORT, but no listener pid could be detected."
+  fi
+  return 0
+}
+
 start_server() {
   if is_running; then
     echo "Podcast Note is already running: pid=$(cat "$PID_FILE"), url=http://$HOST:$PORT"
+    start_lark_events
     return 0
   fi
+
+  if adopt_running_server; then
+    start_lark_events
+    return 0
+  fi
+
+  stop_orphan_listeners
 
   load_env
   mkdir -p "$(dirname "$PID_FILE")" "$(dirname "$LOG_FILE")" "$(dirname "$DB_PATH")"
   : > "$LOG_FILE"
-  setsid bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" >> "$LOG_FILE" 2>&1 < /dev/null &
+  nohup bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" >> "$LOG_FILE" 2>&1 < /dev/null &
   local pid=$!
   echo "$pid" > "$PID_FILE"
 
@@ -109,8 +252,13 @@ start_server() {
       tail -80 "$LOG_FILE" >&2 || true
       exit 1
     fi
-    if curl -fsS "http://$HOST:$PORT/health" >/dev/null 2>&1; then
+    if health_ok; then
       echo "Podcast Note started: pid=$pid, url=http://$HOST:$PORT, db=$DB_PATH, log=$LOG_FILE"
+      if ! start_lark_events; then
+        kill "$pid" 2>/dev/null || true
+        rm -f "$PID_FILE"
+        exit 1
+      fi
       return 0
     fi
     sleep 0.1
@@ -121,8 +269,130 @@ start_server() {
   exit 1
 }
 
+start_lark_events() {
+  load_env
+  if [[ "${PODCAST_NOTE_DISABLE_LARK_EVENTS:-}" == "1" ]]; then
+    echo "Lark event consumer not started: disabled by PODCAST_NOTE_DISABLE_LARK_EVENTS=1."
+    return 0
+  fi
+  if ! lark_configured; then
+    echo "Lark event consumer not started: missing LARK_APP_ID/LARK_APP_SECRET."
+    return 0
+  fi
+  if [[ "${PODCAST_NOTE_LARK_EVENT_TRANSPORT:-sdk-ws}" == "lark-cli" ]] && ! ensure_lark_cli_config; then
+    echo "Lark event consumer not started: failed to initialize lark-cli config." >&2
+    return 1
+  fi
+  ensure_workspace_id
+  if [[ -z "$WORKSPACE_ID" ]]; then
+    echo "Lark event consumer not started: missing workspace id." >&2
+    return 0
+  fi
+  if is_lark_running; then
+    echo "Lark event consumer is already running: pid=$(cat "$LARK_PID_FILE"), event=$EVENT_KEY"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$LARK_PID_FILE")" "$(dirname "$LARK_LOG_FILE")" "$LARK_CLI_HOME"
+  stop_lark_events
+  : > "$LARK_LOG_FILE"
+  local transport="${PODCAST_NOTE_LARK_EVENT_TRANSPORT:-sdk-ws}"
+  nohup env HOME="$LARK_CLI_HOME" bun apps/worker/src/cli.ts lark:events --db "$DB_PATH" --workspace-id "$WORKSPACE_ID" --event-key "$EVENT_KEY" >> "$LARK_LOG_FILE" 2>&1 < /dev/null &
+  local pid=$!
+  echo "$pid" > "$LARK_PID_FILE"
+
+  for _ in $(seq 1 80); do
+    if grep -q "\[event\] ready event_key=$EVENT_KEY" "$LARK_LOG_FILE" 2>/dev/null; then
+      echo "Lark event consumer started: pid=$pid, event=$EVENT_KEY, transport=$transport, workspace=$WORKSPACE_ID, log=$LARK_LOG_FILE"
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$LARK_PID_FILE"
+      echo "Lark event consumer failed to start. Log:" >&2
+      tail -80 "$LARK_LOG_FILE" >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+  rm -f "$LARK_PID_FILE"
+  echo "Lark event consumer did not become ready within 8s. Log:" >&2
+  tail -80 "$LARK_LOG_FILE" >&2 || true
+  return 1
+}
+
+stop_lark_events() {
+  local pids
+  pids="$(lark_worker_pids)"
+  if [[ -f "$LARK_PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$LARK_PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$pid" ]]; then
+      pids="$(printf "%s\n%s\n" "$pids" "$pid" | awk 'NF && !seen[$0]++')"
+    fi
+  fi
+  if [[ -z "$pids" ]]; then
+    rm -f "$LARK_PID_FILE"
+    return 0
+  fi
+  printf "%s\n" "$pids" | while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    kill "$pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 50); do
+    if [[ -z "$(lark_worker_pids)" ]]; then
+      rm -f "$LARK_PID_FILE"
+      return 0
+    fi
+    sleep 0.1
+  done
+  printf "%s\n" "$pids" | while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    kill -9 "$pid" 2>/dev/null || true
+  done
+  if [[ -n "$(lark_worker_pids)" ]]; then
+    echo "Lark event consumer is still running: $(lark_worker_pids)" >&2
+    return 1
+  fi
+  rm -f "$LARK_PID_FILE"
+}
+
+stop_orphan_listeners() {
+  local orphan_pids
+  orphan_pids="$(listener_pids)"
+  [[ -n "$orphan_pids" ]] || return 0
+  echo "$orphan_pids" | while read -r orphan_pid; do
+    [[ -n "$orphan_pid" ]] || continue
+    kill "$orphan_pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 50); do
+    if [[ -z "$(listener_pids)" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "$orphan_pids" | while read -r orphan_pid; do
+    [[ -n "$orphan_pid" ]] || continue
+    kill -9 "$orphan_pid" 2>/dev/null || true
+  done
+  if [[ -n "$(listener_pids)" ]]; then
+    echo "Port $PORT is still occupied by: $(listener_pids)" >&2
+    return 1
+  fi
+}
+
 stop_server() {
+  stop_lark_events
   if ! is_running; then
+    if [[ -n "$(listener_pids)" ]]; then
+      stop_orphan_listeners
+      rm -f "$PID_FILE"
+      echo "Podcast Note stopped"
+      return 0
+    fi
+    if health_ok; then
+      echo "Podcast Note is running at http://$HOST:$PORT, but no listener pid could be detected"
+      return 1
+    fi
     rm -f "$PID_FILE"
     echo "Podcast Note is not running"
     return 0
@@ -157,25 +427,78 @@ case "$COMMAND" in
     start_server
     ;;
   status)
+    load_env
+    ensure_workspace_id
+    lark_status="not running"
+    if is_lark_running; then
+      lark_status="running: pid=$(cat "$LARK_PID_FILE"), event=$EVENT_KEY, log=$LARK_LOG_FILE"
+    fi
     if is_running; then
       echo "Podcast Note is running: pid=$(cat "$PID_FILE"), url=http://$HOST:$PORT, db=$DB_PATH, log=$LOG_FILE"
+      echo "Lark event consumer is $lark_status"
+    elif adopt_running_server; then
+      echo "Lark event consumer is $lark_status"
+      exit 0
     else
       rm -f "$PID_FILE"
       echo "Podcast Note is not running"
+      echo "Lark event consumer is $lark_status"
       exit 1
     fi
     ;;
   logs)
     if [[ -f "$LOG_FILE" ]]; then
+      echo "== Web log: $LOG_FILE =="
       tail -100 "$LOG_FILE"
     else
       echo "No log file found: $LOG_FILE"
-      exit 1
+    fi
+    if [[ -f "$LARK_LOG_FILE" ]]; then
+      echo "== Lark event log: $LARK_LOG_FILE =="
+      tail -100 "$LARK_LOG_FILE"
+    else
+      echo "No Lark event log file found: $LARK_LOG_FILE"
     fi
     ;;
   run-once)
     load_env
     bun apps/worker/src/cli.ts m1:run-once --db "$DB_PATH"
+    ;;
+  events)
+    load_env
+    WORKSPACE_ID="${WORKSPACE_ID:-${PODCAST_NOTE_WORKSPACE_ID:-}}"
+    if [[ -z "$WORKSPACE_ID" ]]; then
+      echo "Missing --workspace-id or PODCAST_NOTE_WORKSPACE_ID for Lark event consumer." >&2
+      exit 2
+    fi
+    if [[ "$EVENT_KEY_SET" == "true" ]]; then
+      HOME="$LARK_CLI_HOME" bun apps/worker/src/cli.ts lark:events --db "$DB_PATH" --workspace-id "$WORKSPACE_ID" --event-key "$EVENT_KEY"
+    else
+      HOME="$LARK_CLI_HOME" bun apps/worker/src/cli.ts lark:events --db "$DB_PATH" --workspace-id "$WORKSPACE_ID"
+    fi
+    ;;
+  bind-chat)
+    load_env
+    WORKSPACE_ID="${WORKSPACE_ID:-${PODCAST_NOTE_WORKSPACE_ID:-}}"
+    if [[ -z "$WORKSPACE_ID" ]]; then
+      echo "Missing --workspace-id or PODCAST_NOTE_WORKSPACE_ID for Lark chat binding." >&2
+      exit 2
+    fi
+    if [[ -z "$CHAT_ID" ]]; then
+      echo "Missing --chat-id for Lark chat binding." >&2
+      exit 2
+    fi
+    bun apps/worker/src/cli.ts lark:bind-chat --db "$DB_PATH" --workspace-id "$WORKSPACE_ID" --chat-id "$CHAT_ID"
+    bun apps/worker/src/cli.ts lark:deliver-pending --db "$DB_PATH" --workspace-id "$WORKSPACE_ID" --limit "$LIMIT"
+    ;;
+  deliver-pending)
+    load_env
+    WORKSPACE_ID="${WORKSPACE_ID:-${PODCAST_NOTE_WORKSPACE_ID:-}}"
+    if [[ -z "$WORKSPACE_ID" ]]; then
+      echo "Missing --workspace-id or PODCAST_NOTE_WORKSPACE_ID for pending Lark delivery." >&2
+      exit 2
+    fi
+    bun apps/worker/src/cli.ts lark:deliver-pending --db "$DB_PATH" --workspace-id "$WORKSPACE_ID" --limit "$LIMIT"
     ;;
   *)
     usage >&2

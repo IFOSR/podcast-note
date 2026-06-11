@@ -8,6 +8,8 @@ import { stableId } from "../../../packages/core/src/format.ts";
 import type { Episode, OutputLanguage, Source, Watch } from "../../../packages/core/src/types.ts";
 import type { ObjectStorageAdapter } from "../../../packages/storage/src/index.ts";
 import { putAudioCache, putTranscriptJson } from "../../../packages/storage/src/index.ts";
+import { createLarkBotClient } from "../../../packages/lark/src/index.ts";
+import { deliverEpisodeResultToAllLarkInstallations } from "./lark-delivery.ts";
 import { markdownReport, processTranscript } from "./pipeline.ts";
 
 export type UserWatchInput = {
@@ -132,6 +134,11 @@ export async function processSourceInputs(input: {
             input.insightProvider
           );
           input.repositories?.saveProcessingResult(processed, watch, input.insightProvider.model);
+          await maybeDeliverToLark({
+            repositories: input.repositories,
+            watch,
+            result: processed
+          });
           updateStage(input.repositories, runId, episode.id, source, "analyzed", "completed");
 
           const episodeDir = join(outputRoot, slugForEpisode(episode));
@@ -166,6 +173,50 @@ export async function processSourceInputs(input: {
   }
 
   return results;
+}
+
+async function maybeDeliverToLark(input: {
+  repositories?: Repositories;
+  watch: Watch;
+  result: Awaited<ReturnType<typeof processTranscript>>;
+}): Promise<void> {
+  if (!input.repositories) return;
+  const appId = process.env["LARK_APP_ID"] ?? process.env["FEISHU_APP_ID"];
+  const appSecret = process.env["LARK_APP_SECRET"] ?? process.env["FEISHU_APP_SECRET"];
+  if (!appId || !appSecret) {
+    console.warn("Lark delivery skipped: LARK_APP_ID/LARK_APP_SECRET is not configured.");
+    return;
+  }
+  const installations = input.repositories.listActiveLarkBotInstallationsForWorkspace(input.watch.workspaceId, appId);
+  if (installations.length === 0) {
+    console.warn(`Lark delivery skipped: no active bot installation for workspace ${input.watch.workspaceId}.`);
+    return;
+  }
+  try {
+    const delivery = await deliverEpisodeResultToAllLarkInstallations({
+      repositories: input.repositories,
+      clientFactory: () => createLarkBotClient({ appId, appSecret }),
+      workspaceId: input.watch.workspaceId,
+      appId,
+      watch: input.watch,
+      result: input.result
+    });
+    console.log(JSON.stringify({
+      ok: true,
+      message: "Delivered episode result to Lark installations",
+      ...delivery,
+      episodeId: input.result.episode.id,
+      watchId: input.watch.id
+    }));
+  } catch (error) {
+    console.error(JSON.stringify({
+      ok: false,
+      message: "Lark delivery failed",
+      episodeId: input.result.episode.id,
+      watchId: input.watch.id,
+      error: error instanceof Error ? error.message : String(error)
+    }));
+  }
 }
 
 function ensureWorkspaceForWatch(repositories: Repositories, watch: Watch): void {

@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Podcast Note · 飞书手机端呈现原型</title>
+  <style>
+    :root {
+      --ink: #1f2329;
+      --muted: #8f959e;
+      --line: #e5e6eb;
+      --blue: #3370ff;
+      --blue-soft: #eaf0ff;
+      --bg: #f5f6f7;
+      --card: #ffffff;
+      --orange: #ff8b1a;
+      --green: #22b66e;
+      --audio: #eef8f2;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", sans-serif;
+      background:
+        radial-gradient(circle at 20% 12%, rgba(51, 112, 255, 0.18), transparent 28rem),
+        radial-gradient(circle at 85% 82%, rgba(34, 182, 110, 0.14), transparent 28rem),
+        #eef1f5;
+    }
+
+    .stage {
+      width: min(1120px, calc(100vw - 32px));
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 34px;
+      align-items: center;
+      padding: 36px 0;
+    }
+
+    .explain h1 {
+      margin: 0 0 18px;
+      max-width: 620px;
+      font-size: clamp(34px, 5vw, 64px);
+      line-height: 1.02;
+      letter-spacing: -0.06em;
+    }
+
+    .explain p {
+      margin: 0 0 18px;
+      color: #5f6670;
+      font-size: 18px;
+      line-height: 1.75;
+    }
+
+    .rule {
+      display: grid;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .rule-item {
+      padding: 16px 18px;
+      border: 1px solid rgba(31, 35, 41, 0.08);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.72);
+      box-shadow: 0 14px 42px rgba(31, 35, 41, 0.08);
+    }
+
+    .rule-item strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .rule-item span {
+      color: #646a73;
+      line-height: 1.5;
+    }
+
+    .phone {
+      width: 390px;
+      height: 844px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 10px solid #111318;
+      border-radius: 44px;
+      background: var(--bg);
+      box-shadow: 0 34px 90px rgba(31, 35, 41, 0.28);
+    }
+
+    .screen {
+      height: 100%;
+      overflow: hidden;
+      background: #fff;
+      border-radius: 34px;
+      position: relative;
+    }
+
+    .status {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      font-weight: 800;
+      background: #fff;
+      font-size: 14px;
+    }
+
+    .icons {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .signal {
+      width: 18px;
+      height: 12px;
+      background: linear-gradient(90deg, #111 20%, transparent 20% 30%, #111 30% 50%, transparent 50% 60%, #111 60% 85%, transparent 85%);
+      opacity: 0.9;
+    }
+
+    .battery {
+      padding: 1px 6px;
+      color: #fff;
+      background: #35c759;
+      border-radius: 5px;
+      font-size: 12px;
+    }
+
+    .topbar {
+      height: 72px;
+      display: grid;
+      grid-template-columns: 48px 1fr 48px;
+      align-items: center;
+      padding: 0 14px;
+      border-bottom: 1px solid #f0f0f0;
+      background: #fff;
+    }
+
+    .back {
+      font-size: 36px;
+      line-height: 1;
+      color: #25282d;
+    }
+
+    .title {
+      text-align: center;
+      font-size: 23px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .more {
+      text-align: right;
+      font-size: 28px;
+      letter-spacing: 2px;
+    }
+
+    .tabs {
+      height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 0 18px;
+      border-bottom: 1px solid #ededed;
+      background: #fff;
+      font-size: 17px;
+    }
+
+    .tab {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      color: #2a2f36;
+    }
+
+    .tab.active {
+      padding: 9px 12px;
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-radius: 10px;
+      font-weight: 800;
+    }
+
+    .tab .folder {
+      width: 22px;
+      height: 16px;
+      display: inline-block;
+      border-radius: 3px;
+      background: #ffc53d;
+      position: relative;
+    }
+
+    .tab .folder::before {
+      content: "";
+      position: absolute;
+      left: 1px;
+      top: -5px;
+      width: 10px;
+      height: 6px;
+      border-radius: 3px 3px 0 0;
+      background: #ffc53d;
+    }
+
+    .chat {
+      height: calc(100% - 42px - 72px - 52px - 92px);
+      overflow: hidden;
+      padding: 18px 14px 26px;
+      background: #fff;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .avatar {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: linear-gradient(145deg, #2b5cff, #10245f);
+      border-radius: 999px;
+      font-weight: 900;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.28);
+    }
+
+    .bubble {
+      max-width: 300px;
+      padding: 13px 14px;
+      border: 1px solid #e2e5eb;
+      border-radius: 17px;
+      background: #fff;
+      box-shadow: 0 5px 18px rgba(31, 35, 41, 0.08);
+    }
+
+    .bubble h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      line-height: 1.3;
+    }
+
+    .bubble p {
+      margin: 0;
+      color: #626a75;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .summary-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .summary-item {
+      padding-top: 10px;
+      border-top: 1px solid #eef0f3;
+    }
+
+    .summary-item strong {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 14px;
+      line-height: 1.38;
+    }
+
+    .summary-item span {
+      color: #7d838c;
+      font-size: 12px;
+    }
+
+    .file-card {
+      max-width: 300px;
+      padding: 12px;
+      border: 1px solid #dedfe3;
+      border-radius: 17px;
+      background: #fff;
+      box-shadow: 0 5px 18px rgba(31, 35, 41, 0.08);
+    }
+
+    .file-head {
+      display: grid;
+      grid-template-columns: 45px 1fr;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .doc-icon,
+    .audio-icon {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      color: #fff;
+      font-size: 22px;
+      font-weight: 900;
+    }
+
+    .doc-icon {
+      background: var(--orange);
+    }
+
+    .audio-icon {
+      background: var(--green);
+    }
+
+    .file-title {
+      font-size: 16px;
+      line-height: 1.25;
+      word-break: break-word;
+    }
+
+    .file-size {
+      margin-top: 3px;
+      color: #9aa0a8;
+      font-size: 13px;
+    }
+
+    .preview {
+      min-height: 104px;
+      border: 1px solid #e1e4e8;
+      border-radius: 11px;
+      overflow: hidden;
+      background: #101820;
+    }
+
+    .report-cover {
+      height: 104px;
+      padding: 16px;
+      color: #f4fbff;
+      background:
+        radial-gradient(circle at 92% 98%, rgba(73, 116, 79, 0.55), transparent 58px),
+        linear-gradient(135deg, #0e1a24, #121b20);
+    }
+
+    .report-cover .label {
+      display: inline-block;
+      margin-bottom: 11px;
+      padding: 3px 7px;
+      color: #0c1820;
+      background: #a7e65c;
+      border-radius: 3px;
+      font-size: 8px;
+      font-weight: 900;
+    }
+
+    .report-cover strong {
+      display: block;
+      max-width: 190px;
+      font-size: 17px;
+      line-height: 1.25;
+    }
+
+    .audio-preview {
+      padding: 12px;
+      border-radius: 12px;
+      background: var(--audio);
+      border: 1px solid #d9eee1;
+    }
+
+    .audio-line {
+      display: grid;
+      grid-template-columns: 34px 1fr 42px;
+      gap: 9px;
+      align-items: center;
+    }
+
+    .play {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--green);
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .wave {
+      height: 24px;
+      border-radius: 999px;
+      background:
+        repeating-linear-gradient(90deg, rgba(34, 182, 110, 0.4) 0 3px, transparent 3px 8px),
+        linear-gradient(90deg, rgba(34, 182, 110, 0.12), rgba(51, 112, 255, 0.12));
+    }
+
+    .duration {
+      color: #67707c;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .input {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 92px;
+      padding: 10px 12px 14px;
+      background: #f7f8fa;
+      border-top: 1px solid #eef0f3;
+    }
+
+    .input-box {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      color: #9aa0a8;
+      background: #fff;
+      border-radius: 18px;
+      font-size: 16px;
+    }
+
+    .tools {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 8px 0;
+      color: #727982;
+      font-size: 23px;
+    }
+
+    @media (max-width: 920px) {
+      .stage {
+        grid-template-columns: 1fr;
+      }
+
+      .explain {
+        order: 2;
+      }
+    }
+
+    @media (max-width: 460px) {
+      body {
+        display: block;
+        background: #fff;
+      }
+
+      .stage {
+        width: 100%;
+        padding: 0;
+      }
+
+      .phone {
+        width: 100vw;
+        height: 100vh;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .screen {
+        border-radius: 0;
+      }
+
+      .explain {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="phone" aria-label="飞书手机端聊天原型">
+      <div class="screen">
+        <div class="status">
+          <span>16:58</span>
+          <div class="icons">
+            <span>5G</span>
+            <span class="signal"></span>
+            <span class="battery">84</span>
+          </div>
+        </div>
+
+        <header class="topbar">
+          <div class="back">‹</div>
+          <div class="title">Podcast Note ▶</div>
+          <div class="more">···</div>
+        </header>
+
+        <nav class="tabs">
+          <div class="tab active">● 消息</div>
+          <div class="tab"><span class="folder"></span>文件</div>
+          <div class="tab">＋</div>
+        </nav>
+
+        <section class="chat">
+          <div class="row">
+            <div class="avatar">PN</div>
+            <div class="bubble">
+              <h2>「AI Agent 商业化雷达」已处理完成</h2>
+              <p>发现 12 集新播客，深度处理 5 集，筛出 7 条核心观点，生成 9 个可直接收听的音频片段。</p>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="avatar">PN</div>
+            <div class="bubble">
+              <h2>今日最值得看的 3 条播客信号</h2>
+              <div class="summary-list">
+                <div class="summary-item">
+                  <strong>1. Agent 产品竞争点正在转向企业工作流。</strong>
+                  <span>证据：02:14-03:08 · 建议听片段 01</span>
+                </div>
+                <div class="summary-item">
+                  <strong>2. Cursor 类产品护城河在团队上下文。</strong>
+                  <span>证据：18:42-20:10 · 建议听片段 02</span>
+                </div>
+                <div class="summary-item">
+                  <strong>3. 企业客户更关心可审计、可回滚的半自动执行。</strong>
+                  <span>证据：41:05-42:33 · 完整报告里有原文摘录</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="avatar">PN</div>
+            <div class="file-card">
+              <div class="file-head">
+                <div class="doc-icon">D</div>
+                <div>
+                  <div class="file-title">播客情报报告_AI_Agent_商业化雷达_2026-06-05.docx</div>
+                  <div class="file-size">428 KB</div>
+                </div>
+              </div>
+              <div class="preview">
+                <div class="report-cover">
+                  <span class="label">PODCAST INTELLIGENCE</span>
+                  <strong>AI Agent 商业化雷达：今日核心观点与证据</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="avatar">PN</div>
+            <div class="file-card">
+              <div class="file-head">
+                <div class="audio-icon">♪</div>
+                <div>
+                  <div class="file-title">片段01_Agent产品转向企业工作流_02m14s-03m08s.mp3</div>
+                  <div class="file-size">00:54 · 870 KB</div>
+                </div>
+              </div>
+              <div class="audio-preview">
+                <div class="audio-line">
+                  <div class="play">▶</div>
+                  <div class="wave"></div>
+                  <div class="duration">00:54</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="avatar">PN</div>
+            <div class="file-card">
+              <div class="file-head">
+                <div class="audio-icon">♪</div>
+                <div>
+                  <div class="file-title">片段02_Cursor护城河在团队上下文_18m42s-20m10s.mp3</div>
+                  <div class="file-size">01:28 · 1.4 MB</div>
+                </div>
+              </div>
+              <div class="audio-preview">
+                <div class="audio-line">
+                  <div class="play">▶</div>
+                  <div class="wave"></div>
+                  <div class="duration">01:28</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <footer class="input">
+          <div class="input-box">
+            <span>可以向自己发送文件或转发消息</span>
+            <span>↗</span>
+          </div>
+          <div class="tools">
+            <span>☺</span>
+            <span>@</span>
+            <span>✎</span>
+            <span>▧</span>
+            <span>Aa</span>
+            <span>＋</span>
+            <span>▶</span>
+          </div>
+        </footer>
+      </div>
+    </section>
+
+    <section class="explain">
+      <h1>飞书端只做接收、阅读和收听。</h1>
+      <p>
+        这个原型按手机飞书聊天流设计：Podcast Note Bot 连续发送摘要气泡、完整报告文件卡、核心音频片段文件卡。用户无需理解新界面，也不需要在飞书里做复杂反馈。
+      </p>
+      <div class="rule">
+        <div class="rule-item">
+          <strong>1. 摘要气泡告诉用户发生了什么</strong>
+          <span>先用一条短消息说明处理结果，再用一条摘要消息列出 3 条核心信号。</span>
+        </div>
+        <div class="rule-item">
+          <strong>2. 完整报告以文件卡呈现</strong>
+          <span>和截图里的 PPT 文件一样，用户点开就是完整飞书文档或 docx 报告。</span>
+        </div>
+        <div class="rule-item">
+          <strong>3. 核心片段以音频文件卡呈现</strong>
+          <span>后台按时间戳切好 mp3，用户在飞书里直接点播放，不跳外部客户端。</span>
+        </div>
+        <div class="rule-item">
+          <strong>4. Watch 管理仍在外部 Web</strong>
+          <span>飞书不承担配置、筛选和知识库检索，避免把聊天界面做复杂。</span>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

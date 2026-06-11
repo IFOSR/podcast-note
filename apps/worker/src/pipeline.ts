@@ -1,4 +1,5 @@
-import { mockInsightProvider, type InsightProvider } from "../../../packages/ai/src/index.ts";
+import type { InsightProvider } from "../../../packages/ai/src/index.ts";
+import { mockInsightProvider } from "../../../packages/ai/src/mock-provider.ts";
 import { formatTimestamp, stableId } from "../../../packages/core/src/format.ts";
 import { publishableInsight } from "../../../packages/core/src/groundedness.ts";
 import { buildSemanticSegments } from "../../../packages/core/src/segmenting.ts";

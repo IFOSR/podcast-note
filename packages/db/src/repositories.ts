@@ -22,6 +22,10 @@ export type DailyBriefStatus = "sent" | "failed" | "skipped";
 export type InsightFeedbackAction = "saved" | "irrelevant" | "wrong" | "archived";
 export type UsageEventType = "view" | "save" | "irrelevant" | "wrong" | "playback" | "open_email";
 export type UsageEntityType = "inbox" | "episode" | "insight" | "brief" | "watch";
+export type LarkBindSessionStatus = "pending" | "completed" | "expired" | "failed";
+export type LarkConnectionStatus = "active" | "reauth_required" | "revoked";
+export type LarkBotInstallationStatus = "active" | "disabled";
+export type LarkDeliveryType = "episode_summary";
 
 export type Session = {
   id: string;
@@ -48,6 +52,66 @@ export type UsageEvent = {
   entityId?: string;
   metadata: Record<string, unknown>;
   occurredAt: string;
+};
+
+export type LarkBindSession = {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  stateHash: string;
+  permissionPackage: string;
+  terminalFingerprint?: string;
+  status: LarkBindSessionStatus;
+  connectionId?: string;
+  verificationUrl: string;
+  expiresAt: string;
+  createdAt: string;
+  completedAt?: string;
+  error?: string;
+};
+
+export type LarkConnection = {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  tenantKey: string;
+  openId: string;
+  unionId?: string;
+  userName?: string;
+  permissionPackage: string;
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string;
+  accessTokenExpiresAt: string;
+  refreshTokenExpiresAt?: string;
+  status: LarkConnectionStatus;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+};
+
+export type LarkBotInstallation = {
+  id: string;
+  workspaceId: string;
+  appId: string;
+  tenantKey: string;
+  chatId: string;
+  chatName?: string;
+  operatorOpenId?: string;
+  status: LarkBotInstallationStatus;
+  installedAt: string;
+  updatedAt: string;
+  disabledAt?: string;
+};
+
+export type LarkDeliveryRecord = {
+  id: string;
+  workspaceId: string;
+  watchId: string;
+  episodeId: string;
+  chatId: string;
+  deliveryType: LarkDeliveryType;
+  providerMessageId: string;
+  deliveredAt: string;
 };
 
 export type WatchPoll = {
@@ -212,6 +276,13 @@ export function createRepositories(db: PodcastNoteDb) {
     attachProcessingRunToJob: (id: string, runId: string) => attachProcessingRunToJob(db, id, runId),
     completeEpisodeProcessingJob: (id: string) => completeEpisodeProcessingJob(db, id),
     failEpisodeProcessingJob: (id: string, error: string) => failEpisodeProcessingJob(db, id, error),
+    requeueStaleEpisodeProcessingJobs: (options: {
+      workspaceId?: string;
+      staleBefore: string;
+      error: string;
+      maxAttempts?: number;
+      jobIds?: string[];
+    }) => requeueStaleEpisodeProcessingJobs(db, options),
     recordDailyBrief: (input: {
       workspaceId: string;
       userId: string;
@@ -262,9 +333,329 @@ export function createRepositories(db: PodcastNoteDb) {
     getLatestTranscriptForEpisode: (episodeId: string) => getLatestTranscriptForEpisode(db, episodeId),
     getLatestInsightsForWatch: (watchId: string, limit = 50) => getLatestInsightsForWatch(db, watchId, limit),
     listProcessedEpisodes: (options: { limit?: number } = {}) => listProcessedEpisodes(db, options),
+    listProcessedEpisodeDetailsForWorkspace: (options: { workspaceId: string; limit?: number }) =>
+      listProcessedEpisodeDetailsForWorkspace(db, options),
     listProcessingRuns: (options: { limit?: number } = {}) => listProcessingRuns(db, options),
-    listInsights: (options: { watchId?: string; episodeId?: string; limit?: number } = {}) => listInsights(db, options)
+    listInsights: (options: { watchId?: string; episodeId?: string; limit?: number } = {}) => listInsights(db, options),
+    createLarkBindSession: (input: {
+      id: string;
+      workspaceId: string;
+      agentId: string;
+      stateHash: string;
+      permissionPackage: string;
+      terminalFingerprint?: string;
+      verificationUrl: string;
+      expiresAt: string;
+      createdAt: string;
+    }) => createLarkBindSession(db, input),
+    getLarkBindSession: (id: string) => getLarkBindSession(db, id),
+    getLarkBindSessionByStateHash: (stateHash: string) => getLarkBindSessionByStateHash(db, stateHash),
+    completeLarkBindSession: (input: {
+      id: string;
+      connectionId: string;
+      completedAt: string;
+    }) => completeLarkBindSession(db, input),
+    expireLarkBindSession: (id: string, error?: string) => expireLarkBindSession(db, id, error),
+    createLarkConnection: (input: {
+      id: string;
+      workspaceId: string;
+      agentId: string;
+      tenantKey: string;
+      openId: string;
+      unionId?: string;
+      userName?: string;
+      permissionPackage: string;
+      encryptedAccessToken: string;
+      encryptedRefreshToken: string;
+      accessTokenExpiresAt: string;
+      refreshTokenExpiresAt?: string;
+      createdAt: string;
+    }) => createLarkConnection(db, input),
+    getLarkConnection: (id: string) => getLarkConnection(db, id),
+    getLatestLarkConnectionForWorkspace: (workspaceId: string) => getLatestLarkConnectionForWorkspace(db, workspaceId),
+    upsertLarkBotInstallation: (input: {
+      id: string;
+      workspaceId: string;
+      appId: string;
+      tenantKey: string;
+      chatId: string;
+      chatName?: string;
+      operatorOpenId?: string;
+      installedAt: string;
+    }) => upsertLarkBotInstallation(db, input),
+    getLatestLarkBotInstallationForWorkspace: (workspaceId: string, appId?: string) =>
+      getLatestLarkBotInstallationForWorkspace(db, workspaceId, appId),
+    listActiveLarkBotInstallationsForWorkspace: (workspaceId: string, appId?: string) =>
+      listActiveLarkBotInstallationsForWorkspace(db, workspaceId, appId),
+    getLarkDeliveryRecord: (input: {
+      workspaceId: string;
+      watchId: string;
+      episodeId: string;
+      chatId: string;
+      deliveryType: LarkDeliveryType;
+    }) => getLarkDeliveryRecord(db, input),
+    createLarkDeliveryRecord: (input: {
+      workspaceId: string;
+      watchId: string;
+      episodeId: string;
+      chatId: string;
+      deliveryType: LarkDeliveryType;
+      providerMessageId: string;
+      deliveredAt?: string;
+    }) => createLarkDeliveryRecord(db, input)
   };
+}
+
+function createLarkBindSession(db: PodcastNoteDb, input: {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  stateHash: string;
+  permissionPackage: string;
+  terminalFingerprint?: string;
+  verificationUrl: string;
+  expiresAt: string;
+  createdAt: string;
+}): LarkBindSession {
+  db.query(`
+    insert into lark_bind_sessions (
+      id, workspace_id, agent_id, state_hash, permission_package, terminal_fingerprint,
+      status, verification_url, expires_at, created_at
+    ) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+  `).run(
+    input.id,
+    input.workspaceId,
+    input.agentId,
+    input.stateHash,
+    input.permissionPackage,
+    input.terminalFingerprint ?? null,
+    input.verificationUrl,
+    input.expiresAt,
+    input.createdAt
+  );
+  const session = getLarkBindSession(db, input.id);
+  if (!session) throw new Error(`Failed to create Lark bind session ${input.id}`);
+  return session;
+}
+
+function getLarkBindSession(db: PodcastNoteDb, id: string): LarkBindSession | undefined {
+  const row = db.query("select * from lark_bind_sessions where id = ?").get(id) as Record<string, unknown> | null;
+  return row ? larkBindSessionFromRow(row) : undefined;
+}
+
+function getLarkBindSessionByStateHash(db: PodcastNoteDb, stateHash: string): LarkBindSession | undefined {
+  const row = db.query("select * from lark_bind_sessions where state_hash = ?").get(stateHash) as Record<string, unknown> | null;
+  return row ? larkBindSessionFromRow(row) : undefined;
+}
+
+function completeLarkBindSession(db: PodcastNoteDb, input: {
+  id: string;
+  connectionId: string;
+  completedAt: string;
+}): LarkBindSession {
+  db.query(`
+    update lark_bind_sessions
+    set status = 'completed', connection_id = ?, completed_at = ?, error = null
+    where id = ?
+  `).run(input.connectionId, input.completedAt, input.id);
+  const session = getLarkBindSession(db, input.id);
+  if (!session) throw new Error(`Failed to complete Lark bind session ${input.id}`);
+  return session;
+}
+
+function expireLarkBindSession(db: PodcastNoteDb, id: string, error?: string): LarkBindSession | undefined {
+  db.query(`
+    update lark_bind_sessions
+    set status = 'expired', error = ?
+    where id = ? and status = 'pending'
+  `).run(error ?? "授权二维码已过期", id);
+  return getLarkBindSession(db, id);
+}
+
+function createLarkConnection(db: PodcastNoteDb, input: {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  tenantKey: string;
+  openId: string;
+  unionId?: string;
+  userName?: string;
+  permissionPackage: string;
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string;
+  accessTokenExpiresAt: string;
+  refreshTokenExpiresAt?: string;
+  createdAt: string;
+}): LarkConnection {
+  db.query(`
+    insert into lark_connections (
+      id, workspace_id, agent_id, tenant_key, open_id, union_id, user_name,
+      permission_package, encrypted_access_token, encrypted_refresh_token,
+      access_token_expires_at, refresh_token_expires_at, status, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    on conflict(id) do update set
+      tenant_key = excluded.tenant_key,
+      open_id = excluded.open_id,
+      union_id = excluded.union_id,
+      user_name = excluded.user_name,
+      permission_package = excluded.permission_package,
+      encrypted_access_token = excluded.encrypted_access_token,
+      encrypted_refresh_token = excluded.encrypted_refresh_token,
+      access_token_expires_at = excluded.access_token_expires_at,
+      refresh_token_expires_at = excluded.refresh_token_expires_at,
+      status = 'active',
+      updated_at = excluded.updated_at,
+      revoked_at = null
+  `).run(
+    input.id,
+    input.workspaceId,
+    input.agentId,
+    input.tenantKey,
+    input.openId,
+    input.unionId ?? null,
+    input.userName ?? null,
+    input.permissionPackage,
+    input.encryptedAccessToken,
+    input.encryptedRefreshToken,
+    input.accessTokenExpiresAt,
+    input.refreshTokenExpiresAt ?? null,
+    input.createdAt,
+    input.createdAt
+  );
+  const connection = getLarkConnection(db, input.id);
+  if (!connection) throw new Error(`Failed to create Lark connection ${input.id}`);
+  return connection;
+}
+
+function getLarkConnection(db: PodcastNoteDb, id: string): LarkConnection | undefined {
+  const row = db.query("select * from lark_connections where id = ?").get(id) as Record<string, unknown> | null;
+  return row ? larkConnectionFromRow(row) : undefined;
+}
+
+function getLatestLarkConnectionForWorkspace(db: PodcastNoteDb, workspaceId: string): LarkConnection | undefined {
+  const row = db.query(`
+    select * from lark_connections
+    where workspace_id = ? and status = 'active'
+    order by updated_at desc, created_at desc
+    limit 1
+  `).get(workspaceId) as Record<string, unknown> | null;
+  return row ? larkConnectionFromRow(row) : undefined;
+}
+
+function upsertLarkBotInstallation(db: PodcastNoteDb, input: {
+  id: string;
+  workspaceId: string;
+  appId: string;
+  tenantKey: string;
+  chatId: string;
+  chatName?: string;
+  operatorOpenId?: string;
+  installedAt: string;
+}): LarkBotInstallation {
+  db.query(`
+    insert into lark_bot_installations (
+      id, workspace_id, app_id, tenant_key, chat_id, chat_name, operator_open_id,
+      status, installed_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    on conflict(workspace_id, app_id, chat_id) do update set
+      tenant_key = excluded.tenant_key,
+      chat_name = excluded.chat_name,
+      operator_open_id = excluded.operator_open_id,
+      status = 'active',
+      updated_at = excluded.updated_at,
+      disabled_at = null
+  `).run(
+    input.id,
+    input.workspaceId,
+    input.appId,
+    input.tenantKey,
+    input.chatId,
+    input.chatName ?? null,
+    input.operatorOpenId ?? null,
+    input.installedAt,
+    input.installedAt
+  );
+  const installation = getLatestLarkBotInstallationForWorkspace(db, input.workspaceId, input.appId);
+  if (!installation) throw new Error(`Failed to upsert Lark bot installation for workspace ${input.workspaceId}`);
+  return installation;
+}
+
+function getLatestLarkBotInstallationForWorkspace(db: PodcastNoteDb, workspaceId: string, appId?: string): LarkBotInstallation | undefined {
+  const row = appId
+    ? db.query(`
+      select * from lark_bot_installations
+      where workspace_id = ? and app_id = ? and status = 'active'
+      order by updated_at desc, installed_at desc
+      limit 1
+    `).get(workspaceId, appId) as Record<string, unknown> | null
+    : db.query(`
+      select * from lark_bot_installations
+      where workspace_id = ? and status = 'active'
+      order by updated_at desc, installed_at desc
+      limit 1
+    `).get(workspaceId) as Record<string, unknown> | null;
+  return row ? larkBotInstallationFromRow(row) : undefined;
+}
+
+function listActiveLarkBotInstallationsForWorkspace(db: PodcastNoteDb, workspaceId: string, appId?: string): LarkBotInstallation[] {
+  const rows = appId
+    ? db.query(`
+      select * from lark_bot_installations
+      where workspace_id = ? and app_id = ? and status = 'active'
+      order by updated_at desc, installed_at desc
+    `).all(workspaceId, appId) as Array<Record<string, unknown>>
+    : db.query(`
+      select * from lark_bot_installations
+      where workspace_id = ? and status = 'active'
+      order by updated_at desc, installed_at desc
+    `).all(workspaceId) as Array<Record<string, unknown>>;
+  return rows.map(larkBotInstallationFromRow);
+}
+
+function getLarkDeliveryRecord(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  watchId: string;
+  episodeId: string;
+  chatId: string;
+  deliveryType: LarkDeliveryType;
+}): LarkDeliveryRecord | undefined {
+  const row = db.query(`
+    select * from lark_delivery_records
+    where workspace_id = ? and watch_id = ? and episode_id = ? and chat_id = ? and delivery_type = ?
+    limit 1
+  `).get(input.workspaceId, input.watchId, input.episodeId, input.chatId, input.deliveryType) as Record<string, unknown> | null;
+  return row ? larkDeliveryRecordFromRow(row) : undefined;
+}
+
+function createLarkDeliveryRecord(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  watchId: string;
+  episodeId: string;
+  chatId: string;
+  deliveryType: LarkDeliveryType;
+  providerMessageId: string;
+  deliveredAt?: string;
+}): LarkDeliveryRecord {
+  const deliveredAt = input.deliveredAt ?? new Date().toISOString();
+  const id = stableId("lark_delivery", `${input.workspaceId}:${input.watchId}:${input.episodeId}:${input.chatId}:${input.deliveryType}`);
+  db.query(`
+    insert into lark_delivery_records (
+      id, workspace_id, watch_id, episode_id, chat_id, delivery_type, provider_message_id, delivered_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(workspace_id, watch_id, episode_id, chat_id, delivery_type) do nothing
+  `).run(
+    id,
+    input.workspaceId,
+    input.watchId,
+    input.episodeId,
+    input.chatId,
+    input.deliveryType,
+    input.providerMessageId,
+    deliveredAt
+  );
+  const record = getLarkDeliveryRecord(db, input);
+  if (!record) throw new Error(`Failed to create Lark delivery record for episode ${input.episodeId}`);
+  return record;
 }
 
 function upsertUser(db: PodcastNoteDb, input: { id: string; email?: string; name?: string; timezone?: string }): User {
@@ -798,6 +1189,81 @@ function failEpisodeProcessingJob(db: PodcastNoteDb, id: string, error: string):
   `).run(error, id);
 }
 
+function requeueStaleEpisodeProcessingJobs(db: PodcastNoteDb, options: {
+  workspaceId?: string;
+  staleBefore: string;
+  error: string;
+  maxAttempts?: number;
+  jobIds?: string[];
+}): number {
+  const maxAttempts = options.maxAttempts ?? Number.MAX_SAFE_INTEGER;
+  const staleParams: unknown[] = [options.staleBefore];
+  let workspaceFilter = "";
+  if (options.workspaceId) {
+    workspaceFilter = "and workspace_id = ?";
+    staleParams.push(options.workspaceId);
+  }
+  let jobFilter = "";
+  if (options.jobIds?.length) {
+    jobFilter = `and id in (${options.jobIds.map(() => "?").join(", ")})`;
+    staleParams.push(...options.jobIds);
+  }
+  const staleJobs = db.query(`
+    select id, processing_run_id, attempts
+    from episode_processing_jobs
+    where status = 'running'
+      and started_at is not null
+      and datetime(started_at) < datetime(?)
+      ${workspaceFilter}
+      ${jobFilter}
+  `).all(...staleParams) as Array<Record<string, unknown>>;
+  if (staleJobs.length === 0) return 0;
+
+  const runIds = staleJobs
+    .map((row) => nullableString(row["processing_run_id"]))
+    .filter((runId) => runId !== undefined);
+  for (const runId of runIds) {
+    failProcessingRun(db, runId, options.error);
+    db.query(`
+      update processing_episode_statuses
+      set stage = 'failed', status = 'failed', error = ?, updated_at = datetime('now')
+      where run_id = ?
+    `).run(options.error, runId);
+  }
+
+  const cappedIds = staleJobs
+    .filter((row) => Number(row["attempts"] ?? 0) >= maxAttempts)
+    .map((row) => String(row["id"]));
+  const retryableIds = staleJobs
+    .filter((row) => Number(row["attempts"] ?? 0) < maxAttempts)
+    .map((row) => String(row["id"]));
+
+  for (const id of cappedIds) {
+    db.query(`
+      update episode_processing_jobs
+      set status = 'failed',
+        error = ?,
+        finished_at = datetime('now'),
+        updated_at = datetime('now')
+      where id = ?
+    `).run(`${options.error} Automatic retry limit reached.`, id);
+  }
+
+  for (const id of retryableIds) {
+    db.query(`
+      update episode_processing_jobs
+      set status = 'queued',
+        processing_run_id = null,
+        error = ?,
+        started_at = null,
+        finished_at = null,
+        updated_at = datetime('now')
+      where id = ?
+    `).run(options.error, id);
+  }
+  return retryableIds.length;
+}
+
 function recordDailyBrief(db: PodcastNoteDb, input: {
   workspaceId: string;
   userId: string;
@@ -1325,6 +1791,24 @@ function listProcessedEpisodes(db: PodcastNoteDb, options: { limit?: number }): 
   }));
 }
 
+function listProcessedEpisodeDetailsForWorkspace(db: PodcastNoteDb, options: { workspaceId: string; limit?: number }): EpisodeDetail[] {
+  const rows = db.query(`
+    select i.episode_id, max(i.created_at) as last_insight_at
+    from insights i
+    join episode_summaries s on s.episode_id = i.episode_id
+    where i.workspace_id = ? and i.status = 'published'
+    group by i.episode_id
+    order by last_insight_at desc
+    limit ?
+  `).all(options.workspaceId, normalizeLimit(options.limit)) as Array<Record<string, unknown>>;
+  return rows
+    .map((row) => getEpisodeDetailForWorkspace(db, {
+      workspaceId: options.workspaceId,
+      episodeId: String(row["episode_id"])
+    }))
+    .filter((detail) => detail !== undefined);
+}
+
 function listProcessingRuns(db: PodcastNoteDb, options: { limit?: number }): Array<Record<string, unknown> & { episodeCount: number }> {
   const rows = db.query(`
     select pr.*, count(pes.episode_id) as episode_count
@@ -1399,6 +1883,74 @@ function usageEventFromRow(row: Record<string, unknown>): UsageEvent {
     entityId: nullableString(row["entity_id"]),
     metadata: parseJsonObject(row["metadata_json"]),
     occurredAt: String(row["occurred_at"])
+  };
+}
+
+function larkBindSessionFromRow(row: Record<string, unknown>): LarkBindSession {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    agentId: String(row["agent_id"]),
+    stateHash: String(row["state_hash"]),
+    permissionPackage: String(row["permission_package"]),
+    terminalFingerprint: nullableString(row["terminal_fingerprint"]),
+    status: String(row["status"]) as LarkBindSessionStatus,
+    connectionId: nullableString(row["connection_id"]),
+    verificationUrl: String(row["verification_url"]),
+    expiresAt: String(row["expires_at"]),
+    createdAt: String(row["created_at"]),
+    completedAt: nullableString(row["completed_at"]),
+    error: nullableString(row["error"])
+  };
+}
+
+function larkConnectionFromRow(row: Record<string, unknown>): LarkConnection {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    agentId: String(row["agent_id"]),
+    tenantKey: String(row["tenant_key"]),
+    openId: String(row["open_id"]),
+    unionId: nullableString(row["union_id"]),
+    userName: nullableString(row["user_name"]),
+    permissionPackage: String(row["permission_package"]),
+    encryptedAccessToken: String(row["encrypted_access_token"]),
+    encryptedRefreshToken: String(row["encrypted_refresh_token"]),
+    accessTokenExpiresAt: String(row["access_token_expires_at"]),
+    refreshTokenExpiresAt: nullableString(row["refresh_token_expires_at"]),
+    status: String(row["status"]) as LarkConnectionStatus,
+    createdAt: String(row["created_at"]),
+    updatedAt: String(row["updated_at"]),
+    revokedAt: nullableString(row["revoked_at"])
+  };
+}
+
+function larkBotInstallationFromRow(row: Record<string, unknown>): LarkBotInstallation {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    appId: String(row["app_id"]),
+    tenantKey: String(row["tenant_key"]),
+    chatId: String(row["chat_id"]),
+    chatName: nullableString(row["chat_name"]),
+    operatorOpenId: nullableString(row["operator_open_id"]),
+    status: String(row["status"]) as LarkBotInstallationStatus,
+    installedAt: String(row["installed_at"]),
+    updatedAt: String(row["updated_at"]),
+    disabledAt: nullableString(row["disabled_at"])
+  };
+}
+
+function larkDeliveryRecordFromRow(row: Record<string, unknown>): LarkDeliveryRecord {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    watchId: String(row["watch_id"]),
+    episodeId: String(row["episode_id"]),
+    chatId: String(row["chat_id"]),
+    deliveryType: String(row["delivery_type"]) as LarkDeliveryType,
+    providerMessageId: String(row["provider_message_id"]),
+    deliveredAt: String(row["delivered_at"])
   };
 }
 

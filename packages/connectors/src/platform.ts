@@ -1,5 +1,5 @@
 import type { ResolvedEpisode, ResolvedSource, SourceConnector } from "./types.ts";
-import { manualConnector } from "./manual.ts";
+import { manualConnector, normalizeAudioUrl } from "./manual.ts";
 
 export const appleConnector: SourceConnector = platformConnector({
   type: "apple",
@@ -37,11 +37,14 @@ function platformConnector(config: {
     },
     async resolveSource(input: string): Promise<ResolvedSource> {
       const fallback = await manualConnector.resolveSource(input);
+      const xiaoyuzhouPodcastTitle = config.type === "xiaoyuzhou" && isXiaoyuzhouPodcastUrl(input)
+        ? await xiaoyuzhouPodcastTitleFromUrl(input)
+        : undefined;
       return {
         ...fallback,
         type: config.type,
         externalId: platformExternalId(input),
-        title: fallback.title ?? config.title,
+        title: xiaoyuzhouPodcastTitle ?? fallback.title ?? config.title,
         metadata: {
           ...fallback.metadata,
           platform: config.type,
@@ -81,13 +84,28 @@ async function xiaoyuzhouPodcastEpisodes(input: string): Promise<ResolvedEpisode
   return dedupeEpisodes(episodes);
 }
 
+async function xiaoyuzhouPodcastTitleFromUrl(input: string): Promise<string | undefined> {
+  const html = await fetchHtml(input);
+  return xiaoyuzhouPodcastTitleFromHtml(html);
+}
+
+export function xiaoyuzhouPodcastTitleFromHtml(html: string): string | undefined {
+  for (const episode of jsonObjectsByType(html, "EPISODE")) {
+    const podcast = recordField(episode, "podcast");
+    const title = stringField(podcast, "title");
+    if (title) return title;
+  }
+  return undefined;
+}
+
 function xiaoyuzhouEpisodeFromObject(input: Record<string, unknown>, sourceUrl: string): ResolvedEpisode {
   const id = stringField(input, "eid");
   const enclosure = recordField(input, "enclosure");
   const media = recordField(input, "media");
   const mediaSource = recordField(media, "source");
   const podcast = recordField(input, "podcast");
-  const audioUrl = stringField(enclosure, "url") ?? stringField(mediaSource, "url");
+  const rawAudioUrl = stringField(enclosure, "url") ?? stringField(mediaSource, "url");
+  const audioUrl = rawAudioUrl ? normalizeAudioUrl(rawAudioUrl) : undefined;
   const pageUrl = id ? `https://www.xiaoyuzhoufm.com/episode/${id}` : sourceUrl;
   return {
     externalId: id,

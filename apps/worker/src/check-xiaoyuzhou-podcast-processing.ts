@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/index.ts";
+import { mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/mock-provider.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
 import { processSourceInputs } from "./process-sources.ts";
 
