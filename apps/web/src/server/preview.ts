@@ -550,6 +550,7 @@ function requeueTransientFailedMonitorJobs(workspaceId: string): number {
         or error like '%Reconnecting%'
         or error like '%rate limit%'
         or error like '%timeout%'
+        or error like '%timed out%'
         or error like '%Unable to connect%'
         or error like '%typo in the url or port%'
       )

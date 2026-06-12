@@ -98,6 +98,35 @@ try {
     throw new Error("Expected no queued jobs after successful processing.");
   }
 
+  const retryEpisode: Episode = {
+    ...episode,
+    id: stableId("ep", "queue-retry-cleanup"),
+    guid: "queue-guid-retry",
+    audioUrl: "https://example.invalid/queue-retry.mp3",
+    pageUrl: "https://example.invalid/queue-retry"
+  };
+  repos.upsertEpisode(retryEpisode);
+  const failedJob = repos.enqueueEpisodeProcessingJob({
+    workspaceId: workspace.id,
+    watchId: watch.id,
+    episodeId: retryEpisode.id,
+    sourceUrl: retryEpisode.pageUrl,
+    queuedAt: "2026-05-07T03:00:00.000Z"
+  });
+  const retryRunId = repos.startProcessingRun({ watchId: watch.id, sources: [retryEpisode.pageUrl] });
+  repos.attachProcessingRunToJob(failedJob.id, retryRunId);
+  repos.failEpisodeProcessingJob(failedJob.id, "Volcengine transcription timed out after 900000ms.");
+  const requeued = repos.enqueueEpisodeProcessingJob({
+    workspaceId: workspace.id,
+    watchId: watch.id,
+    episodeId: retryEpisode.id,
+    sourceUrl: retryEpisode.pageUrl,
+    queuedAt: "2026-05-07T03:10:00.000Z"
+  });
+  if (requeued.status !== "queued" || requeued.error || requeued.startedAt || requeued.finishedAt || requeued.processingRunId) {
+    throw new Error(`Expected failed job re-enqueue to clear stale run fields, got ${JSON.stringify(requeued)}.`);
+  }
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,

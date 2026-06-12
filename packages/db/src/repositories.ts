@@ -1118,6 +1118,18 @@ function enqueueEpisodeProcessingJob(db: PodcastNoteDb, input: {
         when episode_processing_jobs.status in ('completed', 'running') then episode_processing_jobs.error
         else null
       end,
+      started_at = case
+        when episode_processing_jobs.status in ('completed', 'running') then episode_processing_jobs.started_at
+        else null
+      end,
+      finished_at = case
+        when episode_processing_jobs.status in ('completed', 'running') then episode_processing_jobs.finished_at
+        else null
+      end,
+      processing_run_id = case
+        when episode_processing_jobs.status in ('completed', 'running') then episode_processing_jobs.processing_run_id
+        else null
+      end,
       updated_at = datetime('now')
   `).run(
     id,
