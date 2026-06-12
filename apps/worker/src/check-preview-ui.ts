@@ -142,7 +142,7 @@ try {
   assertIncludes(emptyRunMonitorPage, "回看处理进度", "监控任务需要展示最近一次回看处理进度。");
   assertIncludes(emptyRunMonitorPage, "解析目标", "监控进度需要展示正在解析的目标。");
   assertIncludes(emptyRunMonitorPage, "当前处理", "监控进度需要展示当前处理对象。");
-  assertIncludes(emptyRunMonitorPage, "回看发现", "监控进度需要展示回看发现与产出数量。");
+  assertIncludes(emptyRunMonitorPage, "最近检查", "监控进度需要展示最近检查与产出数量。");
   assertIncludes(emptyRunMonitorPage, "回看完成", "已完成的回看任务需要展示完成状态。");
   assertIncludes(emptyRunMonitorPage, "没有产出内容", "无产出的回看需要明确告诉用户没有产出。");
   assertIncludes(emptyRunMonitorPage, "请优先提供频道页、RSS 或单集链接", "无产出的回看需要给出下一步修正建议。");
@@ -195,6 +195,7 @@ try {
   assertIncludes(reportMonitorPage, ">删除</button>", "监控需要提供删除操作。");
   assertIncludes(reportMonitorPage, "Preview Audio", "监控任务列表需要展示任务名称。");
   assertIncludes(reportMonitorPage, "Preview audio verification episode", "展开监控任务后应能看到该任务产出的内容。");
+  assertIncludes(reportMonitorPage, "节目发布时间：", "监控结果必须优先展示播客原始发布时间。");
   assertIncludes(reportMonitorPage, "与处理目标匹配度", "核心观点匹配度需要说明是和当前处理目标匹配。");
   assertNotIncludes(reportMonitorPage, "<span class=\"score\">相关度", "核心观点不应再使用含糊的相关度文案。");
 
@@ -308,6 +309,7 @@ function seedProcessedEpisode(path: string): void {
     sourceId: undefined,
     title: "Preview audio verification episode",
     description: "Fixture used to verify audio-backed result rendering.",
+    publishedAt: "2026-05-07T06:00:00.000Z",
     durationSec: 120,
     audioUrl: "https://example.invalid/preview-audio.mp3",
     pageUrl: "https://example.invalid/episode",
@@ -433,6 +435,7 @@ function seedMonitorOnlySummary(path: string): void {
     sourceId: undefined,
     title: "Monitor-only Xiaoyuzhou episode",
     description: "Fixture used to ensure monitor results do not leak into immediate results.",
+    publishedAt: "2026-05-08T06:00:00.000Z",
     durationSec: 120,
     audioUrl: "https://example.invalid/monitor-only.mp3",
     pageUrl: "https://www.xiaoyuzhoufm.com/episode/monitor-only",

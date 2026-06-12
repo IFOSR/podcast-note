@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { mockInsightProvider, mockTranscriptProvider } from "../../../packages/ai/src/mock-provider.ts";
 import type { SourceConnector } from "../../../packages/connectors/src/index.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
 import { runM1Once } from "./m1-run-once.ts";
@@ -75,6 +76,8 @@ try {
     workspaceId: workspace.id,
     now: "2026-05-07T08:00:00.000Z",
     connector,
+    transcriptProvider: mockTranscriptProvider,
+    insightProvider: mockInsightProvider,
     processingLimit: 5
   });
   const inbox = repos.listInboxItems({ workspaceId: workspace.id, limit: 10 });

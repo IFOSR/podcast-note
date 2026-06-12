@@ -49,7 +49,7 @@ export function createVolcengineTranscriptProvider(
     options.queryEndpoint ?? process.env["VOLCENGINE_ASR_QUERY_ENDPOINT"] ?? "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query";
   const flashEndpoint = process.env["VOLCENGINE_ASR_FLASH_ENDPOINT"] ?? "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
   const pollIntervalMs = options.pollIntervalMs ?? numberFromEnv("VOLCENGINE_ASR_POLL_INTERVAL_MS", 3000);
-  const timeoutMs = options.timeoutMs ?? numberFromEnv("VOLCENGINE_ASR_TIMEOUT_MS", 15 * 60 * 1000);
+  const baseTimeoutMs = options.timeoutMs ?? numberFromEnv("VOLCENGINE_ASR_TIMEOUT_MS", 60 * 60 * 1000);
   const language = options.language ?? process.env["VOLCENGINE_ASR_LANGUAGE"];
   const enableSpeakerInfo = options.enableSpeakerInfo ?? booleanFromEnv("VOLCENGINE_ASR_ENABLE_SPEAKER_INFO", true);
 
@@ -108,12 +108,18 @@ export function createVolcengineTranscriptProvider(
         resourceId,
         requestId,
         pollIntervalMs,
-        timeoutMs
+        timeoutMs: volcengineAsrTimeoutMs(input.episode.durationSec, baseTimeoutMs)
       });
 
       return volcengineResponseToTranscriptionOutput(result, language);
     }
   };
+}
+
+export function volcengineAsrTimeoutMs(durationSec?: number, baseTimeoutMs = 60 * 60 * 1000): number {
+  const durationMs = Math.max(0, durationSec ?? 0) * 1000;
+  if (durationMs <= baseTimeoutMs) return baseTimeoutMs;
+  return durationMs + 60 * 60 * 1000;
 }
 
 async function recognizeFlash(input: {

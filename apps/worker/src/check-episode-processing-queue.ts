@@ -84,6 +84,10 @@ try {
   if (!completed || completed.status !== "completed" || completed.attempts !== 1 || !completed.processingRunId) {
     throw new Error(`Expected completed queue job with run id, got ${JSON.stringify(completed)}.`);
   }
+  const run = repos.getProcessingRun(completed.processingRunId);
+  if (!run || run.status !== "completed" || !run["finished_at"]) {
+    throw new Error(`Expected processing run to be completed with finishedAt, got ${JSON.stringify(run)}.`);
+  }
   if (!processed || processed.transcriptCount !== 1 || processed.insightCount < 1) {
     throw new Error("Expected queued episode to be transcribed, summarized, and saved with insights.");
   }

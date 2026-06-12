@@ -114,9 +114,12 @@ Optional ASR settings:
 VOLCENGINE_ASR_MODE=standard
 VOLCENGINE_ASR_RESOURCE_ID=...
 VOLCENGINE_ASR_ENABLE_SPEAKER_INFO=true
+VOLCENGINE_ASR_TIMEOUT_MS=3600000
 ```
 
-Codex insight extraction uses the non-interactive provider from `packages/ai/src/codex-provider.ts`. Make sure `codex exec` works in your local environment before running real processing.
+`VOLCENGINE_ASR_TIMEOUT_MS` defaults to 60 minutes as the base wait limit. For longer episodes, the worker automatically waits for the episode duration plus one extra hour.
+
+Codex insight extraction uses the non-interactive provider from `packages/ai/src/codex-provider.ts`. Make sure `codex exec` works in your local environment before running real processing. Long transcripts can take several minutes to summarize; `CODEX_INSIGHT_TIMEOUT_MS` defaults to 30 minutes.
 
 ## Real CLI Flow
 

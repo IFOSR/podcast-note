@@ -44,7 +44,7 @@ export async function runM1Once(input: RunM1OnceInput): Promise<RunM1OnceResult>
 
     const watch = input.repositories.getWatchForWorkspace(job.workspaceId, job.watchId);
     if (!watch) continue;
-    const episodes = pollingResult.episodeIds
+    const episodes = pollingResult.candidateEpisodeIds
       .map((episodeId) => input.repositories.getEpisode(episodeId))
       .filter((episode) => episode !== undefined);
     const relevanceResult = enqueueRelevantEpisodes({

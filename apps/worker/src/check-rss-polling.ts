@@ -106,6 +106,7 @@ try {
   if (first.candidateCount !== 3) throw new Error(`expected 3 candidates from connector, got ${first.candidateCount}`);
   if (first.queuedCount !== 2) throw new Error(`expected 2 newly queued unique episodes, got ${first.queuedCount}`);
   if (first.episodeIds.length !== 2) throw new Error(`expected 2 unique episode ids, got ${first.episodeIds.length}`);
+  if (first.candidateEpisodeIds.length !== 2) throw new Error(`expected 2 unique candidate episode ids, got ${first.candidateEpisodeIds.length}`);
 
   const storedA = repos.getEpisode(first.episodeIds[0]!);
   const storedB = repos.getEpisode(first.episodeIds[1]!);
@@ -129,6 +130,7 @@ try {
     }
   });
   if (repeat.queuedCount !== 0) throw new Error(`repeat polling should not requeue duplicates, got ${repeat.queuedCount}`);
+  if (repeat.candidateEpisodeIds.length !== 2) throw new Error(`repeat polling should still expose existing candidate ids, got ${repeat.candidateEpisodeIds.length}`);
 
   console.log(JSON.stringify({
     ok: true,
@@ -136,6 +138,7 @@ try {
     sourceId: storedA.sourceId,
     candidateCount: first.candidateCount,
     queuedCount: first.queuedCount,
+    candidateEpisodeIds: first.candidateEpisodeIds,
     episodeIds: first.episodeIds,
     repeatQueuedCount: repeat.queuedCount,
     latestPoll: {

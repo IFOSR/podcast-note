@@ -512,7 +512,7 @@ function staleRunningMonitorJobs(workspaceId: string, now: Date): Array<{ id: st
   `).all(workspaceId) as Array<Record<string, unknown>>;
   return rows
     .map((row) => {
-      const startedAt = new Date(String(row["started_at"]).replace(" ", "T"));
+      const startedAt = parseStoredDate(String(row["started_at"])) ?? new Date(String(row["started_at"]));
       const elapsedMs = now.getTime() - startedAt.getTime();
       const stage = String(row["stage"]);
       const durationSec = nullableNumber(row["duration_sec"]);
@@ -745,6 +745,7 @@ type WatchProgress = {
     stage: string;
     status: string;
     error?: string;
+    publishedAt?: string;
     updatedAt?: string;
   }>;
 };
@@ -839,6 +840,7 @@ function watchProgress(watchId: string): WatchProgress | undefined {
     select
       pes.*,
       e.title as episode_title,
+      e.published_at as episode_published_at,
       e.duration_sec as episode_duration_sec,
       max(coalesce(s.created_at, ''), coalesce(i.created_at, '')) as latest_result_at
     from processing_episode_statuses pes
@@ -890,6 +892,7 @@ function normalizeProgressStatusRow(row: Record<string, unknown>): WatchProgress
       title: optionalString(row["episode_title"]),
       stage: "analyzed",
       status: "completed",
+      publishedAt: optionalString(row["episode_published_at"]),
       updatedAt: latestResultAt
     };
   }
@@ -899,6 +902,7 @@ function normalizeProgressStatusRow(row: Record<string, unknown>): WatchProgress
     stage,
     status,
     error,
+    publishedAt: optionalString(row["episode_published_at"]),
     updatedAt
   };
 }
@@ -1602,9 +1606,11 @@ function renderEpisodeReport(report: ReturnType<typeof summary>["episodeReports"
   const worthListening = summary?.worthListening;
   const entities = summary?.entities ?? [];
   const playerId = `player-${safeDomId(report.episode.id)}`;
+  const publishedAt = episodePublishedTimeLabel(report.episode.publishedAt);
+  const processedAt = latestReportUpdatedAt(report);
   return `<article class="report">
     <div class="report-head">
-      <div class="meta"><span class="pill">${escapeHtml(report.source?.title ?? report.source?.type ?? "播客")}</span><span class="pill paused">${escapeHtml(report.transcript?.language ?? report.episode.language ?? "unknown")}</span>${report.player.durationSec ? `<span class="pill paused">${escapeHtml(formatDuration(report.player.durationSec))}</span>` : ""}</div>
+      <div class="meta"><span class="pill">${escapeHtml(report.source?.title ?? report.source?.type ?? "播客")}</span>${publishedAt ? `<span class="pill">节目发布时间：${escapeHtml(publishedAt)}</span>` : ""}${processedAt ? `<span class="pill paused">处理时间：${escapeHtml(processedAt)}</span>` : ""}<span class="pill paused">${escapeHtml(report.transcript?.language ?? report.episode.language ?? "unknown")}</span>${report.player.durationSec ? `<span class="pill paused">${escapeHtml(formatDuration(report.player.durationSec))}</span>` : ""}</div>
       <h3 class="report-title">${escapeHtml(report.episode.title)}</h3>
       ${report.episode.description ? `<p class="muted">${escapeHtml(report.episode.description)}</p>` : ""}
       <div class="actions"><a class="button secondary" href="${escapeHtml(report.player.pageUrl)}" target="_blank" rel="noreferrer">打开原文</a>${report.player.audioUrl ? `<a class="button secondary" href="${escapeHtml(report.player.audioUrl)}" target="_blank" rel="noreferrer">打开音频</a>` : ""}</div>
@@ -1721,7 +1727,12 @@ function renderWatchAction(watch: ReturnType<typeof summary>["watches"][number],
 }
 
 function renderWatchOutput(report: ReturnType<typeof summary>["episodeReports"][number]): string {
-  return `<details class="watch-output" data-output-id="${escapeHtml(report.episode.id)}"><summary>${escapeHtml(report.episode.title)}${report.summary?.oneLiner ? `<span class="muted small"> · ${escapeHtml(report.summary.oneLiner)}</span>` : ""}</summary>${renderEpisodeReport(report)}</details>`;
+  const publishedAt = episodePublishedTimeLabel(report.episode.publishedAt);
+  const processedAt = latestReportUpdatedAt(report);
+  const timeMeta = [publishedAt ? `节目发布时间：${publishedAt}` : undefined, processedAt ? `处理时间：${processedAt}` : undefined]
+    .filter((item): item is string => item !== undefined)
+    .join(" · ");
+  return `<details class="watch-output" data-output-id="${escapeHtml(report.episode.id)}"><summary><span>${escapeHtml(report.episode.title)}</span>${timeMeta ? `<span class="muted small"> · ${escapeHtml(timeMeta)}</span>` : ""}${report.summary?.oneLiner ? `<span class="muted small"> · ${escapeHtml(report.summary.oneLiner)}</span>` : ""}</summary>${renderEpisodeReport(report)}</details>`;
 }
 
 function renderWatchProgress(watchId: string, progress: WatchProgress | undefined, outputCount: number): string {
@@ -1773,11 +1784,15 @@ function renderEpisodeProgress(watchId: string, episodes: WatchProgress["episode
       const title = episode.title ?? episode.id;
       const label = `${stageLabel(episode.stage)}${episode.status === "running" ? "中" : ""}`;
       const error = episode.error ? `<div class="hint">错误：${escapeHtml(episode.error)}</div>` : "";
+      const timeMeta = [
+        episode.publishedAt ? `节目发布时间：${episodePublishedTimeLabel(episode.publishedAt)}` : undefined,
+        episode.updatedAt ? `系统更新时间：${episode.updatedAt}` : undefined
+      ].filter((item): item is string => item !== undefined).join(" · ");
       const retryAction = episode.status === "failed"
         ? `<form method="post" action="/api/watch-action"><input type="hidden" name="watchId" value="${escapeHtml(watchId)}"/><input type="hidden" name="action" value="retry-episode"/><input type="hidden" name="episodeId" value="${escapeHtml(episode.id)}"/><button class="secondary" type="submit">重新处理本集</button></form>`
         : "";
       return `<li>
-        <div><strong>${escapeHtml(title)}</strong><span class="muted small">${episode.updatedAt ? `更新时间：${escapeHtml(episode.updatedAt)}` : "等待处理"}</span>${error}</div>
+        <div><strong>${escapeHtml(title)}</strong><span class="muted small">${timeMeta ? escapeHtml(timeMeta) : "等待处理"}</span>${error}</div>
         <div class="actions"><span class="stage-chip ${escapeHtml(episode.status)}">${escapeHtml(label)}</span>${retryAction}</div>
       </li>`;
     }).join("")}</ol>
@@ -1823,6 +1838,39 @@ function formatTimestamp(seconds: number): string {
 
 function formatDuration(seconds: number): string {
   return `时长 ${formatTimestamp(seconds)}`;
+}
+
+function episodePublishedTimeLabel(value?: string): string | undefined {
+  if (!value) return undefined;
+  const parsed = parseStoredDate(value);
+  if (!parsed) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Shanghai"
+  }).format(parsed);
+}
+
+function latestReportUpdatedAt(report: ReturnType<typeof summary>["episodeReports"][number]): string | undefined {
+  const candidates = [
+    report.summary?.createdAt,
+    ...report.insights.map((insight) => insight.createdAt)
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  const latest = candidates
+    .map((value) => ({ value, time: parseStoredDate(value)?.getTime() ?? NaN }))
+    .filter((item) => Number.isFinite(item.time))
+    .sort((left, right) => right.time - left.time)[0]?.value;
+  return episodePublishedTimeLabel(latest);
+}
+
+function parseStoredDate(value: string): Date | undefined {
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(value) ? `${value.replace(" ", "T")}Z` : value;
+  const date = new Date(normalized);
+  return Number.isFinite(date.getTime()) ? date : undefined;
 }
 
 function renderSeekButton(playerId: string, seconds: number, label: string): string {

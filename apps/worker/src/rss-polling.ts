@@ -13,6 +13,7 @@ export type PollingJobResult = {
   sourceId: string;
   candidateCount: number;
   queuedCount: number;
+  candidateEpisodeIds: string[];
   episodeIds: string[];
 };
 
@@ -34,13 +35,13 @@ export async function runPollingJob(input: {
       since: new Date(input.job.since),
       limit: input.episodeLimit ?? 100
     });
-    const episodeIds = upsertUniqueEpisodes(input.repositories, source.id, candidates);
+    const upsertResult = upsertUniqueEpisodes(input.repositories, source.id, candidates);
 
     input.repositories.recordWatchPoll(input.job.watchId, {
       checkedAt,
       status: "completed",
       candidateCount: candidates.length,
-      queuedCount: episodeIds.length
+      queuedCount: upsertResult.newEpisodeIds.length
     });
 
     return {
@@ -48,8 +49,9 @@ export async function runPollingJob(input: {
       watchId: input.job.watchId,
       sourceId: source.id,
       candidateCount: candidates.length,
-      queuedCount: episodeIds.length,
-      episodeIds
+      queuedCount: upsertResult.newEpisodeIds.length,
+      candidateEpisodeIds: upsertResult.candidateEpisodeIds,
+      episodeIds: upsertResult.newEpisodeIds
     };
   } catch (error) {
     input.repositories.recordWatchPoll(input.job.watchId, {
@@ -63,9 +65,10 @@ export async function runPollingJob(input: {
   }
 }
 
-function upsertUniqueEpisodes(repositories: Repositories, sourceId: string, candidates: ResolvedEpisode[]): string[] {
+function upsertUniqueEpisodes(repositories: Repositories, sourceId: string, candidates: ResolvedEpisode[]): { candidateEpisodeIds: string[]; newEpisodeIds: string[] } {
   const seenInBatch = new Set<string>();
-  const queuedIds: string[] = [];
+  const candidateEpisodeIds: string[] = [];
+  const newEpisodeIds: string[] = [];
 
   for (const candidate of candidates) {
     const episode = resolvedEpisodeToEpisode(candidate, sourceId);
@@ -80,10 +83,11 @@ function upsertUniqueEpisodes(repositories: Repositories, sourceId: string, cand
 
     const existing = repositories.getEpisode(episode.id);
     repositories.upsertEpisode(episode);
-    if (!existing) queuedIds.push(episode.id);
+    candidateEpisodeIds.push(episode.id);
+    if (!existing) newEpisodeIds.push(episode.id);
   }
 
-  return queuedIds;
+  return { candidateEpisodeIds, newEpisodeIds };
 }
 
 function resolvedEpisodeToEpisode(episode: ResolvedEpisode, sourceId: string): Episode {

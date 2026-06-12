@@ -35,7 +35,7 @@ export function createCodexInsightProvider(options: CodexInsightProviderOptions 
   const command = options.command ?? process.env["CODEX_COMMAND"] ?? "codex";
   const model = options.model ?? process.env["CODEX_INSIGHT_MODEL"] ?? "gpt-5.5";
   const cwd = options.cwd ?? process.cwd();
-  const timeoutMs = options.timeoutMs ?? numberFromEnv("CODEX_INSIGHT_TIMEOUT_MS", 10 * 60 * 1000);
+  const timeoutMs = options.timeoutMs ?? numberFromEnv("CODEX_INSIGHT_TIMEOUT_MS", 30 * 60 * 1000);
 
   return {
     name: "codex",
