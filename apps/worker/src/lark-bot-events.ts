@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
 import { createLarkBotClient, recordLarkBotInstalled } from "../../../packages/lark/src/index.ts";
 import { deliverPendingLarkEpisodeResults } from "./lark-delivery.ts";
+import { handleLarkBotCommand } from "./lark-command-router.ts";
 
 export type LarkBotAddedEvent = {
   header?: {
@@ -126,6 +127,17 @@ export async function handleLarkMessageReceivedEvent(input: {
   context: LarkMessageEventContext;
   event: LarkMessageReceivedEvent;
 }): Promise<void> {
+  if (input.context.repositories && input.context.workspaceId) {
+    const command = await handleLarkBotCommand({
+      repositories: input.context.repositories,
+      workspaceId: input.context.workspaceId,
+      appId: input.context.appId,
+      tenantKey: input.context.tenantKey,
+      client: input.context.client,
+      event: input.event
+    });
+    if (command.handled) return;
+  }
   const reply = larkBotMessageReplyText({
     chatType: input.event.chat_type,
     content: input.event.content
@@ -470,6 +482,7 @@ async function consumeLarkEvent(options: {
   child.stdin?.write("\n");
 
   let stdoutBuffer = "";
+  let lineQueue = Promise.resolve();
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
     stdoutBuffer += chunk;
@@ -478,7 +491,7 @@ async function consumeLarkEvent(options: {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      options.onLine(trimmed).catch((error) => {
+      lineQueue = lineQueue.then(() => options.onLine(trimmed)).catch((error) => {
         console.error(error instanceof Error ? error.message : String(error));
       });
     }
@@ -496,6 +509,7 @@ async function consumeLarkEvent(options: {
       else reject(new Error(`lark-cli event consumer exited with code ${code}`));
     });
   });
+  await lineQueue;
 }
 
 function timestampToIso(timestampMs: string | undefined): string | undefined {

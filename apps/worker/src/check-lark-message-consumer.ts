@@ -17,6 +17,16 @@ const user = repositories.upsertUser({
 const workspace = repositories.ensurePersonalWorkspaceForUser(user.id);
 const sentMessages: Array<{ chatId: string; text: string }> = [];
 
+repositories.upsertSource({
+  id: "src_sg101_consumer",
+  type: "xiaoyuzhou",
+  url: "https://www.xiaoyuzhoufm.com/podcast/sg101",
+  canonicalUrl: "https://www.xiaoyuzhoufm.com/podcast/sg101",
+  externalId: "sg101",
+  title: "硅谷101",
+  author: "硅谷101"
+});
+
 const sdkEvent = larkMessageEventFromSdk({
   message: {
     chat_id: "oc_sdk_personal",
@@ -57,7 +67,9 @@ if (larkRawEventType({ event: { type: "message" } }) !== "message") {
 writeFileSync(fakeLarkCli, [
   "#!/usr/bin/env bash",
   "echo '[event] ready event_key=im.message.receive_v1' >&2",
-  "printf '%s\\n' '{\"chat_id\":\"oc_personal_consumer\",\"chat_type\":\"p2p\",\"content\":\"/bind\",\"message_type\":\"text\",\"sender_id\":\"ou_consumer\"}'"
+  "printf '%s\\n' '{\"chat_id\":\"oc_personal_consumer\",\"chat_type\":\"p2p\",\"content\":\"/bind\",\"message_type\":\"text\",\"sender_id\":\"ou_consumer\"}'",
+  "printf '%s\\n' '{\"chat_id\":\"oc_personal_consumer\",\"chat_type\":\"p2p\",\"content\":\"监控硅谷101，每天检查\",\"message_type\":\"text\",\"sender_id\":\"ou_consumer\"}'",
+  "printf '%s\\n' '{\"chat_id\":\"oc_personal_consumer\",\"chat_type\":\"p2p\",\"content\":\"确认\",\"message_type\":\"text\",\"sender_id\":\"ou_consumer\"}'"
 ].join("\n"));
 chmodSync(fakeLarkCli, 0o755);
 
@@ -86,8 +98,20 @@ if (installation.chatName !== "个人播客助手") {
 if (installation.operatorOpenId !== "ou_consumer") {
   throw new Error(`Expected sender open_id to be persisted, got ${installation.operatorOpenId}`);
 }
-if (sentMessages.length !== 1 || !sentMessages[0]?.text.includes("个人接收已连接")) {
-  throw new Error(`Expected one personal binding confirmation message, got ${JSON.stringify(sentMessages)}`);
+if (sentMessages.length !== 3 || !sentMessages[0]?.text.includes("个人接收已连接")) {
+  throw new Error(`Expected binding plus command replies, got ${JSON.stringify(sentMessages)}`);
+}
+if (!sentMessages[1]?.text.includes("请确认创建监控任务") || !sentMessages[1]?.text.includes("硅谷101")) {
+  throw new Error(`Expected natural-language monitor confirmation reply, got ${JSON.stringify(sentMessages)}`);
+}
+if (!sentMessages[2]?.text.includes("已创建监控：硅谷101") || !sentMessages[2]?.text.includes("xiaoyuzhoufm.com/podcast/sg101")) {
+  throw new Error(`Expected confirmed watch creation reply, got ${JSON.stringify(sentMessages)}`);
+}
+
+const watches = repositories.listWatchesForWorkspace(workspace.id);
+const watch = watches.find((item) => item.name === "硅谷101");
+if (!watch || watch.query !== "https://www.xiaoyuzhoufm.com/podcast/sg101" || watch.frequency !== "daily") {
+  throw new Error(`Expected confirmed natural-language watch to be persisted, got ${JSON.stringify(watches)}`);
 }
 
 const log = readFileSync(fakeLarkCli, "utf8");

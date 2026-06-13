@@ -26,6 +26,7 @@ export type LarkBindSessionStatus = "pending" | "completed" | "expired" | "faile
 export type LarkConnectionStatus = "active" | "reauth_required" | "revoked";
 export type LarkBotInstallationStatus = "active" | "disabled";
 export type LarkDeliveryType = "episode_summary";
+export type LarkPendingIntentStatus = "pending" | "completed" | "cancelled" | "expired";
 
 export type Session = {
   id: string;
@@ -112,6 +113,20 @@ export type LarkDeliveryRecord = {
   deliveryType: LarkDeliveryType;
   providerMessageId: string;
   deliveredAt: string;
+};
+
+export type LarkPendingIntent = {
+  id: string;
+  workspaceId: string;
+  chatId: string;
+  senderOpenId?: string;
+  intentType: string;
+  intent: Record<string, unknown>;
+  status: LarkPendingIntentStatus;
+  expiresAt: string;
+  createdAt: string;
+  completedAt?: string;
+  error?: string;
 };
 
 export type WatchPoll = {
@@ -240,6 +255,7 @@ export function createRepositories(db: PodcastNoteDb) {
     planPollingJobs: (options: { now: string; workspaceId?: string }) => planPollingJobs(db, options),
     upsertWatch: (watch: Watch) => upsertWatch(db, watch),
     upsertSource: (source: Source) => upsertSource(db, source),
+    findSourceByTitle: (title: string) => findSourceByTitle(db, title),
     upsertEpisode: (episode: Episode) => upsertEpisode(db, episode),
     saveTranscript: (input: {
       episodeId: string;
@@ -272,6 +288,8 @@ export function createRepositories(db: PodcastNoteDb) {
     }) => enqueueEpisodeProcessingJob(db, input),
     getEpisodeProcessingJob: (id: string) => getEpisodeProcessingJob(db, id),
     listQueuedEpisodeProcessingJobs: (options: { workspaceId?: string; limit?: number } = {}) => listQueuedEpisodeProcessingJobs(db, options),
+    countEpisodeProcessingJobsByStatus: (workspaceId?: string) => countEpisodeProcessingJobsByStatus(db, workspaceId),
+    retryFailedEpisodeProcessingJobsForWorkspace: (workspaceId: string) => retryFailedEpisodeProcessingJobsForWorkspace(db, workspaceId),
     claimEpisodeProcessingJob: (id: string) => claimEpisodeProcessingJob(db, id),
     attachProcessingRunToJob: (id: string, runId: string) => attachProcessingRunToJob(db, id, runId),
     completeEpisodeProcessingJob: (id: string) => completeEpisodeProcessingJob(db, id),
@@ -402,7 +420,25 @@ export function createRepositories(db: PodcastNoteDb) {
       deliveryType: LarkDeliveryType;
       providerMessageId: string;
       deliveredAt?: string;
-    }) => createLarkDeliveryRecord(db, input)
+    }) => createLarkDeliveryRecord(db, input),
+    createLarkPendingIntent: (input: {
+      workspaceId: string;
+      chatId: string;
+      senderOpenId?: string;
+      intentType: string;
+      intent: Record<string, unknown>;
+      expiresAt: string;
+      createdAt?: string;
+    }) => createLarkPendingIntent(db, input),
+    getLatestPendingLarkIntent: (input: {
+      workspaceId: string;
+      chatId: string;
+      senderOpenId?: string;
+      now?: string;
+    }) => getLatestPendingLarkIntent(db, input),
+    completeLarkPendingIntent: (id: string, completedAt?: string) => completeLarkPendingIntent(db, id, completedAt),
+    cancelLarkPendingIntent: (id: string, completedAt?: string, error?: string) => cancelLarkPendingIntent(db, id, completedAt, error),
+    expireLarkPendingIntents: (now?: string) => expireLarkPendingIntents(db, now)
   };
 }
 
@@ -656,6 +692,91 @@ function createLarkDeliveryRecord(db: PodcastNoteDb, input: {
   const record = getLarkDeliveryRecord(db, input);
   if (!record) throw new Error(`Failed to create Lark delivery record for episode ${input.episodeId}`);
   return record;
+}
+
+function createLarkPendingIntent(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  chatId: string;
+  senderOpenId?: string;
+  intentType: string;
+  intent: Record<string, unknown>;
+  expiresAt: string;
+  createdAt?: string;
+}): LarkPendingIntent {
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const id = stableId("lark_pending", `${input.workspaceId}:${input.chatId}:${input.senderOpenId ?? ""}:${input.intentType}:${createdAt}`);
+  db.query(`
+    insert into lark_pending_intents (
+      id, workspace_id, chat_id, sender_open_id, intent_type, intent_json,
+      status, expires_at, created_at
+    ) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+  `).run(
+    id,
+    input.workspaceId,
+    input.chatId,
+    input.senderOpenId ?? null,
+    input.intentType,
+    JSON.stringify(input.intent),
+    input.expiresAt,
+    createdAt
+  );
+  const intent = db.query("select * from lark_pending_intents where id = ?").get(id) as Record<string, unknown> | null;
+  if (!intent) throw new Error(`Failed to create Lark pending intent ${id}`);
+  return larkPendingIntentFromRow(intent);
+}
+
+function getLatestPendingLarkIntent(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  chatId: string;
+  senderOpenId?: string;
+  now?: string;
+}): LarkPendingIntent | undefined {
+  expireLarkPendingIntents(db, input.now);
+  const params: unknown[] = [input.workspaceId, input.chatId];
+  let senderFilter = "";
+  if (input.senderOpenId) {
+    senderFilter = "and (sender_open_id = ? or sender_open_id is null)";
+    params.push(input.senderOpenId);
+  }
+  const row = db.query(`
+    select * from lark_pending_intents
+    where workspace_id = ?
+      and chat_id = ?
+      and status = 'pending'
+      ${senderFilter}
+    order by created_at desc
+    limit 1
+  `).get(...params) as Record<string, unknown> | null;
+  return row ? larkPendingIntentFromRow(row) : undefined;
+}
+
+function completeLarkPendingIntent(db: PodcastNoteDb, id: string, completedAt?: string): LarkPendingIntent | undefined {
+  db.query(`
+    update lark_pending_intents
+    set status = 'completed', completed_at = ?, error = null
+    where id = ? and status = 'pending'
+  `).run(completedAt ?? new Date().toISOString(), id);
+  const row = db.query("select * from lark_pending_intents where id = ?").get(id) as Record<string, unknown> | null;
+  return row ? larkPendingIntentFromRow(row) : undefined;
+}
+
+function cancelLarkPendingIntent(db: PodcastNoteDb, id: string, completedAt?: string, error?: string): LarkPendingIntent | undefined {
+  db.query(`
+    update lark_pending_intents
+    set status = 'cancelled', completed_at = ?, error = ?
+    where id = ? and status = 'pending'
+  `).run(completedAt ?? new Date().toISOString(), error ?? null, id);
+  const row = db.query("select * from lark_pending_intents where id = ?").get(id) as Record<string, unknown> | null;
+  return row ? larkPendingIntentFromRow(row) : undefined;
+}
+
+function expireLarkPendingIntents(db: PodcastNoteDb, now?: string): number {
+  const result = db.query(`
+    update lark_pending_intents
+    set status = 'expired', completed_at = ?, error = 'pending intent expired'
+    where status = 'pending' and datetime(expires_at) <= datetime(?)
+  `).run(now ?? new Date().toISOString(), now ?? new Date().toISOString());
+  return result.changes;
 }
 
 function upsertUser(db: PodcastNoteDb, input: { id: string; email?: string; name?: string; timezone?: string }): User {
@@ -1050,6 +1171,19 @@ function upsertSource(db: PodcastNoteDb, source: Source): Source {
   return source;
 }
 
+function findSourceByTitle(db: PodcastNoteDb, title: string): Source | undefined {
+  const normalized = title.trim();
+  if (!normalized) return undefined;
+  const row = db.query(`
+    select * from sources
+    where title = ?
+       or lower(title) = lower(?)
+    order by updated_at desc
+    limit 1
+  `).get(normalized, normalized) as Record<string, unknown> | null;
+  return row ? sourceFromRow(row) : undefined;
+}
+
 function upsertEpisode(db: PodcastNoteDb, episode: Episode): Episode {
   db.query(`
     insert into episodes (
@@ -1165,6 +1299,34 @@ function listQueuedEpisodeProcessingJobs(db: PodcastNoteDb, options: { workspace
     limit ?
   `).all(...params, normalizeLimit(options.limit)) as Array<Record<string, unknown>>;
   return rows.map(episodeProcessingJobFromRow);
+}
+
+function countEpisodeProcessingJobsByStatus(db: PodcastNoteDb, workspaceId?: string): Record<EpisodeProcessingJobStatus, number> {
+  const rows = workspaceId
+    ? db.query("select status, count(*) as count from episode_processing_jobs where workspace_id = ? group by status").all(workspaceId) as Array<Record<string, unknown>>
+    : db.query("select status, count(*) as count from episode_processing_jobs group by status").all() as Array<Record<string, unknown>>;
+  const counts: Record<EpisodeProcessingJobStatus, number> = { queued: 0, running: 0, completed: 0, failed: 0 };
+  for (const row of rows) {
+    const status = String(row["status"]) as EpisodeProcessingJobStatus;
+    if (status in counts) counts[status] = Number(row["count"] ?? 0);
+  }
+  return counts;
+}
+
+function retryFailedEpisodeProcessingJobsForWorkspace(db: PodcastNoteDb, workspaceId: string): number {
+  const result = db.query(`
+    update episode_processing_jobs
+    set status = 'queued',
+      queued_at = ?,
+      processing_run_id = null,
+      error = null,
+      started_at = null,
+      finished_at = null,
+      updated_at = datetime('now')
+    where workspace_id = ?
+      and status = 'failed'
+  `).run(new Date().toISOString(), workspaceId);
+  return result.changes;
 }
 
 function claimEpisodeProcessingJob(db: PodcastNoteDb, id: string): EpisodeProcessingJob | undefined {
@@ -1963,6 +2125,22 @@ function larkDeliveryRecordFromRow(row: Record<string, unknown>): LarkDeliveryRe
     deliveryType: String(row["delivery_type"]) as LarkDeliveryType,
     providerMessageId: String(row["provider_message_id"]),
     deliveredAt: String(row["delivered_at"])
+  };
+}
+
+function larkPendingIntentFromRow(row: Record<string, unknown>): LarkPendingIntent {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    chatId: String(row["chat_id"]),
+    senderOpenId: nullableString(row["sender_open_id"]),
+    intentType: String(row["intent_type"]),
+    intent: parseJsonObject(row["intent_json"]),
+    status: String(row["status"]) as LarkPendingIntentStatus,
+    expiresAt: String(row["expires_at"]),
+    createdAt: String(row["created_at"]),
+    completedAt: nullableString(row["completed_at"]),
+    error: nullableString(row["error"])
   };
 }
 

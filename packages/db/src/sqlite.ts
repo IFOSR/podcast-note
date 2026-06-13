@@ -276,5 +276,22 @@ function ensureLarkAuthSchema(db: PodcastNoteDb): void {
 
     create index if not exists lark_delivery_records_workspace_delivered_idx
       on lark_delivery_records (workspace_id, delivered_at desc);
+
+    create table if not exists lark_pending_intents (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      chat_id text not null,
+      sender_open_id text,
+      intent_type text not null,
+      intent_json text not null,
+      status text not null default 'pending' check (status in ('pending', 'completed', 'cancelled', 'expired')),
+      expires_at text not null,
+      created_at text not null,
+      completed_at text,
+      error text
+    );
+
+    create index if not exists lark_pending_intents_chat_status_idx
+      on lark_pending_intents (workspace_id, chat_id, status, created_at desc);
   `);
 }

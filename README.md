@@ -89,6 +89,23 @@ scripts/podcast-note start --port 3001 --db storage/podcast-note.sqlite
 
 `scripts/podcast-note start` and `scripts/podcast-note run-once` load `.env` automatically.
 
+## Feishu Bot Commands
+
+Podcast Note supports a personal Feishu/Lark bot conversation as a lightweight control surface. The Web app is still the configuration and full-report console; Feishu is for quick input, status checks, and receiving processed results.
+
+After the administrator configures `LARK_APP_ID` and `LARK_APP_SECRET`, start the service and open the Feishu integration page in the Web preview. Scan the bot QR code with Feishu, open the Podcast Note bot private chat, then send `/bind` or any supported command. The backend records that private chat as a delivery target through the WebSocket message event `im.message.receive_v1`.
+
+Supported private-chat messages:
+
+- Send a Xiaoyuzhou episode URL to process that single episode immediately.
+- Send a Xiaoyuzhou podcast URL to create or reuse a monitor for that podcast.
+- Send natural language such as `监控硅谷101` or `帮我关注 AI炼金术，每天检查` to create a monitor by channel name. The bot asks for `确认` before creating the monitor; reply `取消` to discard it.
+- Send `状态` or `进度` to see monitor and queue counts.
+- Send `重试失败` to requeue failed episode-processing jobs in the current workspace.
+- Send `暂停 硅谷101` or `恢复 硅谷101` to pause or resume a matching monitor.
+
+Team group delivery is intentionally not the primary path yet. The current production path is personal private-chat binding plus one-time delivery de-duplication, so every processed result is pushed once per active bound Feishu target.
+
 ## Required Configuration
 
 Real Web processing requires Volcengine ASR credentials and Codex CLI access.
