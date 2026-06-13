@@ -27,6 +27,7 @@ try {
     metadata: { sourceTitle: "硅谷101" }
   });
   const sentMessages: string[] = [];
+  const searchCalls: Array<{ query: string; platform?: string }> = [];
   const client = {
     sendTextMessage: async (input: { chatId: string; text: string }) => {
       sentMessages.push(input.text);
@@ -46,6 +47,16 @@ try {
       sender_id: "ou_natural",
       content: "帮我监控硅谷101，实时检查",
       message_type: "text"
+    },
+    podcastSearch: async (input) => {
+      searchCalls.push(input);
+      if (input.platform !== "xiaoyuzhou" || input.query !== "商业访谈录") return [];
+      return [{
+        type: "xiaoyuzhou",
+        url: "https://www.xiaoyuzhoufm.com/podcast/business-interview",
+        title: "商业访谈录",
+        author: "商业访谈录"
+      }];
     },
     now: "2026-06-13T10:00:00.000Z"
   });
@@ -103,6 +114,58 @@ try {
   const afterDuplicate = repositories.listWatchesForWorkspace(workspace.id).filter((watch) => watch.name === "硅谷101");
   if (afterDuplicate.length !== 1) {
     throw new Error(`Expected duplicate natural watch to reuse existing watch, got ${JSON.stringify(afterDuplicate)}.`);
+  }
+
+  await handleLarkBotCommand({
+    repositories,
+    workspaceId: workspace.id,
+    appId: "cli_lark_natural_watch",
+    tenantKey: "tenant_natural",
+    client,
+    event: {
+      chat_id: "oc_search",
+      chat_type: "p2p",
+      sender_id: "ou_natural",
+      content: "小宇宙里面有一个商业访谈录，我看这个节目做的也都不错，你帮我把这个监控起来吧",
+      message_type: "text"
+    },
+    podcastSearch: async (input) => {
+      searchCalls.push(input);
+      if (input.platform !== "xiaoyuzhou" || input.query !== "商业访谈录") return [];
+      return [{
+        type: "xiaoyuzhou",
+        url: "https://www.xiaoyuzhoufm.com/podcast/business-interview",
+        title: "商业访谈录",
+        author: "商业访谈录"
+      }];
+    },
+    now: "2026-06-13T10:04:00.000Z"
+  });
+  await handleLarkBotCommand({
+    repositories,
+    workspaceId: workspace.id,
+    appId: "cli_lark_natural_watch",
+    tenantKey: "tenant_natural",
+    client,
+    event: {
+      chat_id: "oc_search",
+      chat_type: "p2p",
+      sender_id: "ou_natural",
+      content: "确认",
+      message_type: "text"
+    },
+    now: "2026-06-13T10:05:00.000Z"
+  });
+  const businessWatch = repositories.listWatchesForWorkspace(workspace.id).find((watch) => watch.name === "商业访谈录");
+  if (!searchCalls.some((call) => call.platform === "xiaoyuzhou" && call.query === "商业访谈录")) {
+    throw new Error(`Expected natural sentence to search Xiaoyuzhou by extracted podcast name, got ${JSON.stringify(searchCalls)}.`);
+  }
+  if (!businessWatch || businessWatch.query !== "https://www.xiaoyuzhoufm.com/podcast/business-interview") {
+    throw new Error(`Expected natural sentence to create watch from resolved podcast URL, got ${JSON.stringify(businessWatch)}.`);
+  }
+  const badWatch = repositories.listWatchesForWorkspace(workspace.id).find((watch) => watch.query.includes("小宇宙里面有一个商业访谈录"));
+  if (badWatch) {
+    throw new Error(`Natural sentence must not be stored as the watch query, got ${JSON.stringify(badWatch)}.`);
   }
 
   console.log(JSON.stringify({

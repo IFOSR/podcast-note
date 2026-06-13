@@ -99,7 +99,7 @@ Supported private-chat messages:
 
 - Send a Xiaoyuzhou episode URL to process that single episode immediately.
 - Send a Xiaoyuzhou podcast URL to create or reuse a monitor for that podcast.
-- Send natural language such as `监控硅谷101` or `帮我关注 AI炼金术，每天检查` to create a monitor by channel name. The bot asks for `确认` before creating the monitor; reply `取消` to discard it.
+- Send natural language such as `小宇宙里面有一个商业访谈录，帮我监控起来` or `帮我关注 AI炼金术，每天检查`. The bot extracts the platform and podcast name, resolves a real podcast channel URL, then asks for `确认` before creating the monitor. If it cannot find a real channel URL, it will not create a monitor from the raw sentence.
 - Send `状态` or `进度` to see monitor and queue counts.
 - Send `重试失败` to requeue failed episode-processing jobs in the current workspace.
 - Send `暂停 硅谷101` or `恢复 硅谷101` to pause or resume a matching monitor.
@@ -109,6 +109,15 @@ Team group delivery is intentionally not the primary path yet. The current produ
 ## Required Configuration
 
 Real Web processing requires Volcengine ASR credentials and Codex CLI access.
+
+Natural-language Feishu commands can resolve Xiaoyuzhou podcast names through Xiaoyuzhou's authenticated search API when configured:
+
+```bash
+XIAOYUZHOU_ACCESS_TOKEN=...
+XIAOYUZHOU_DEVICE_ID=...
+```
+
+`XIAOYUZHOU_DEVICE_ID` is optional. Without `XIAOYUZHOU_ACCESS_TOKEN`, Xiaoyuzhou natural-language commands still bind the chat and parse intent, but they will not create a monitor unless a matching source already exists locally or the user sends a real podcast URL.
 
 Volcengine ASR can be configured with either:
 

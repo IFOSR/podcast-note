@@ -1,4 +1,4 @@
-import { connectorFor, type SourceConnector } from "../../../packages/connectors/src/index.ts";
+import { connectorFor, type ResolvedSource, type SourceConnector } from "../../../packages/connectors/src/index.ts";
 import { episodeDedupeKey } from "../../../packages/core/src/dedupe.ts";
 import { stableId } from "../../../packages/core/src/format.ts";
 import type { Episode, Source, Watch } from "../../../packages/core/src/types.ts";
@@ -22,13 +22,21 @@ export type LarkBotCommandInput = {
   client: LarkBotEventClient;
   event: LarkMessageReceivedEvent;
   connectorForInput?: (input: string) => SourceConnector;
+  podcastSearch?: PodcastSearch;
   now?: string;
 };
+
+export type PodcastSearchInput = {
+  query: string;
+  platform?: Source["type"];
+};
+
+export type PodcastSearch = (input: PodcastSearchInput) => Promise<ResolvedSource[]>;
 
 type ParsedLarkIntent =
   | { type: "process_episode"; url: string }
   | { type: "create_watch"; url: string }
-  | { type: "create_watch_by_name"; name: string; frequency: Watch["frequency"] }
+  | { type: "search_watch"; query: string; platform?: Source["type"]; frequency: Watch["frequency"] }
   | { type: "status" }
   | { type: "retry_failed" }
   | { type: "pause_watch"; name: string }
@@ -84,19 +92,46 @@ export async function handleLarkBotCommand(input: LarkBotCommandInput): Promise<
     return { handled: true, intentType: intent.type, reply };
   }
 
+  return prepareSearchWatch(input, intent);
+}
+
+async function prepareSearchWatch(input: LarkBotCommandInput, intent: Extract<ParsedLarkIntent, { type: "search_watch" }>): Promise<LarkBotCommandResult> {
+  const resolved = await resolvePodcastCandidate(input, intent);
+  if (!resolved) {
+    const platform = intent.platform === "xiaoyuzhou" ? "小宇宙" : "目标平台";
+    const reply = [
+      `我理解你想在${platform}监控：${intent.query}`,
+      "",
+      "但我还没有找到可以监控的真实频道链接，所以不会创建监控任务。",
+      "请直接发送播客频道链接，或把节目名称说得更精确一些。"
+    ].join("\n");
+    await input.client.sendTextMessage({ chatId: input.event.chat_id!, text: reply });
+    return { handled: true, intentType: intent.type, reply };
+  }
+  const source = resolvedSourceToSource(resolved);
+  input.repositories.upsertSource(source);
+  const pendingIntent = {
+    type: "confirm_watch_source",
+    source: resolved,
+    frequency: intent.frequency,
+    originalQuery: intent.query,
+    platform: intent.platform
+  };
   const pending = input.repositories.createLarkPendingIntent({
     workspaceId: input.workspaceId,
-    chatId: input.event.chat_id,
+    chatId: input.event.chat_id!,
     senderOpenId: input.event.sender_id,
-    intentType: intent.type,
-    intent,
+    intentType: pendingIntent.type,
+    intent: pendingIntent,
     createdAt: input.now,
     expiresAt: new Date(Date.parse(input.now ?? new Date().toISOString()) + 10 * 60 * 1000).toISOString()
   });
   const reply = [
     "请确认创建监控任务：",
     "",
-    `频道/关键词：${intent.name}`,
+    `搜索词：${intent.query}`,
+    `匹配频道：${resolved.title ?? hostLabel(resolved.url)}`,
+    `频道链接：${resolved.url}`,
     `检查频率：${frequencyLabel(intent.frequency)}`,
     "",
     "回复「确认」创建，回复「取消」放弃。",
@@ -118,8 +153,8 @@ export function parseLarkBotIntent(content: string): ParsedLarkIntent {
   if (resumeName) return { type: "resume_watch", name: resumeName };
   const url = firstHttpUrl(content);
   if (!url) {
-    const watchName = watchNameFromText(normalized);
-    return watchName ? { type: "create_watch_by_name", name: watchName, frequency: frequencyFromText(normalized) } : { type: "unknown" };
+    const search = searchWatchFromText(normalized);
+    return search ? { type: "search_watch", ...search, frequency: frequencyFromText(normalized) } : { type: "unknown" };
   }
   if (isPodcastUrl(url)) return { type: "create_watch", url };
   return { type: "process_episode", url };
@@ -178,15 +213,21 @@ async function handlePendingDecision(input: LarkBotCommandInput, decision: "conf
     return { handled: true, intentType: decision, reply };
   }
 
-  const intent = pending.intent as Partial<Extract<ParsedLarkIntent, { type: "create_watch_by_name" }>>;
-  if (intent.type !== "create_watch_by_name" || !intent.name) {
+  const intent = pending.intent as Partial<{
+    type: "confirm_watch_source";
+    source: ResolvedSource;
+    frequency: Watch["frequency"];
+  }>;
+  if (intent.type !== "confirm_watch_source" || !intent.source?.url) {
     input.repositories.cancelLarkPendingIntent(pending.id, input.now, "unsupported pending intent");
     const reply = "这个待确认任务已经失效，请重新发送需求。";
     await input.client.sendTextMessage({ chatId: input.event.chat_id!, text: reply });
     return { handled: true, intentType: decision, reply };
   }
-  const watch = ensureWatchForName(input.repositories, input.workspaceId, {
-    name: intent.name,
+  const source = resolvedSourceToSource(intent.source);
+  input.repositories.upsertSource(source);
+  const watch = ensureWatchForSource(input.repositories, input.workspaceId, {
+    ...intent.source,
     frequency: intent.frequency ?? "daily"
   });
   input.repositories.completeLarkPendingIntent(pending.id, input.now);
@@ -227,41 +268,20 @@ function ensureImmediateWatch(repositories: Repositories, workspaceId: string, e
   });
 }
 
-function ensureWatchForSource(repositories: Repositories, workspaceId: string, source: { url: string; title?: string }): Watch {
+function ensureWatchForSource(repositories: Repositories, workspaceId: string, source: { url: string; title?: string; frequency?: Watch["frequency"] }): Watch {
   const existing = repositories.listWatchesForWorkspace(workspaceId).find((watch) => watch.query === source.url);
   if (existing) return existing;
   return repositories.createWatchForWorkspace(workspaceId, {
     id: stableId("watch", `${workspaceId}:lark-command-watch:${source.url}`),
     name: source.title ?? hostLabel(source.url),
-    type: "topic",
+    type: "podcast",
     query: source.url,
     outputLanguage: "zh-CN",
     includeTerms: [],
     excludeTerms: [],
     expandedTerms: [source.title ?? "", source.url].filter(Boolean),
     minRelevanceScore: 0.65,
-    frequency: "daily",
-    backfillDays: 3,
-    enabled: true
-  });
-}
-
-function ensureWatchForName(repositories: Repositories, workspaceId: string, input: { name: string; frequency: Watch["frequency"] }): Watch {
-  const source = repositories.findSourceByTitle(input.name);
-  const query = source?.url ?? input.name;
-  const existing = repositories.listWatchesForWorkspace(workspaceId).find((watch) => watch.name === input.name || watch.query === query);
-  if (existing) return existing;
-  return repositories.createWatchForWorkspace(workspaceId, {
-    id: stableId("watch", `${workspaceId}:lark-command-watch-name:${input.name}`),
-    name: input.name,
-    type: "topic",
-    query,
-    outputLanguage: "zh-CN",
-    includeTerms: [],
-    excludeTerms: [],
-    expandedTerms: source ? [input.name, source.url] : [input.name],
-    minRelevanceScore: 0.65,
-    frequency: input.frequency,
+    frequency: source.frequency ?? "daily",
     backfillDays: 3,
     enabled: true
   });
@@ -324,14 +344,19 @@ function firstHttpUrl(content: string): string | undefined {
   return content.match(/https?:\/\/[^\s<>"']+/i)?.[0]?.replace(/[，。),]+$/u, "");
 }
 
-function watchNameFromText(content: string): string | undefined {
+function searchWatchFromText(content: string): { query: string; platform?: Source["type"] } | undefined {
   if (!/(监控|关注|订阅)/.test(content)) return undefined;
-  return content
+  const platform = /小宇宙/.test(content) ? "xiaoyuzhou" : undefined;
+  const explicit = content.match(/(?:叫|名叫|有一个|有个)\s*([^\s，,。；;、]+)(?:节目|播客|频道|账号)?/u)?.[1]
+    ?? content.match(/(?:监控|关注|订阅)\s*([^\s，,。；;、]+)(?:节目|播客|频道|账号)?/u)?.[1];
+  const query = (explicit ?? content)
     .replace(/^(帮我|请|我想|想要|我要)?\s*(监控|关注|订阅)\s*/u, "")
+    .replace(/^(小宇宙|小宇宙里面|小宇宙里)\s*/u, "")
     .replace(/[，,。].*$/u, "")
-    .replace(/(这个|频道|播客|账号|有新节目.*|每天.*|每小时.*|实时.*|每周.*)$/u, "")
+    .replace(/(这个|频道|播客|节目|账号|有新节目.*|每天.*|每小时.*|实时.*|每周.*)$/u, "")
     .trim()
-    .replace(/^["'“”]+|["'“”]+$/g, "") || undefined;
+    .replace(/^["'“”]+|["'“”]+$/g, "");
+  return query ? { query, platform } : undefined;
 }
 
 function frequencyFromText(content: string): Watch["frequency"] {
@@ -376,6 +401,114 @@ function frequencyLabel(frequency: Watch["frequency"]): string {
   if (frequency === "daily") return "每天";
   if (frequency === "realtime") return "每小时";
   return "每周";
+}
+
+async function resolvePodcastCandidate(input: LarkBotCommandInput, intent: Extract<ParsedLarkIntent, { type: "search_watch" }>): Promise<ResolvedSource | undefined> {
+  const source = input.repositories.findSourceByTitle(intent.query);
+  if (source && (!intent.platform || source.type === intent.platform)) return source;
+  const results = await (input.podcastSearch ?? defaultPodcastSearch)({
+    query: intent.query,
+    platform: intent.platform
+  });
+  return results.find((result) => isPodcastSourceUrl(result.url) && (!intent.platform || result.type === intent.platform)) ?? results.find((result) => isPodcastSourceUrl(result.url));
+}
+
+async function defaultPodcastSearch(input: PodcastSearchInput): Promise<ResolvedSource[]> {
+  if (!input.platform || input.platform === "xiaoyuzhou") {
+    const xiaoyuzhou = await searchXiaoyuzhouPodcasts(input.query);
+    if (xiaoyuzhou.length > 0 || input.platform === "xiaoyuzhou") return xiaoyuzhou;
+  }
+  const candidates = candidateUrlsFromText(input.query);
+  const sources: ResolvedSource[] = [];
+  for (const url of candidates) {
+    const connector = connectorFor(url);
+    if (input.platform && connector.type !== input.platform) continue;
+    try {
+      sources.push(await connector.resolveSource(url));
+    } catch {
+      // Search is best-effort; unresolved candidates are ignored.
+    }
+  }
+  return sources;
+}
+
+async function searchXiaoyuzhouPodcasts(query: string): Promise<ResolvedSource[]> {
+  const accessToken = process.env["XIAOYUZHOU_ACCESS_TOKEN"] ?? process.env["XIAOYUZHOUFM_ACCESS_TOKEN"];
+  if (!accessToken) return [];
+  const response = await fetch("https://api.xiaoyuzhoufm.com/v1/search/create", {
+    method: "POST",
+    headers: {
+      "accept": "application/json",
+      "accept-language": "zh-Hans-CN;q=1.0",
+      "abtest-info": "{\"old_user_discovery_feed\":\"enable\"}",
+      "app-buildno": "1576",
+      "app-permissions": "4",
+      "app-version": "2.57.1",
+      "bundleid": "app.podcast.cosmos",
+      "content-type": "application/json",
+      "host": "api.xiaoyuzhoufm.com",
+      "local-time": new Date().toISOString(),
+      "market": "AppStore",
+      "model": "iPhone14,2",
+      "os": "ios",
+      "os-version": "17.4.1",
+      "timezone": "Asia/Shanghai",
+      "user-agent": "Xiaoyuzhou/2.57.1 (build:1576; iOS 17.4.1)",
+      "wificonnected": "true",
+      "x-custom-xiaoyuzhou-app-dev": "",
+      "x-jike-access-token": accessToken,
+      "x-jike-device-id": process.env["XIAOYUZHOU_DEVICE_ID"] ?? process.env["XIAOYUZHOUFM_DEVICE_ID"] ?? "81ADBFD6-6921-482B-9AB9-A29E7CC7BB55"
+    },
+    body: JSON.stringify({ keyword: query, type: "PODCAST" })
+  });
+  if (!response.ok) return [];
+  const payload = await response.json() as { data?: Array<Record<string, unknown>> };
+  return (payload.data ?? [])
+    .map((item) => {
+      const pid = stringField(item, "pid");
+      if (!pid) return undefined;
+      return {
+        type: "xiaoyuzhou" as const,
+        url: `https://www.xiaoyuzhoufm.com/podcast/${pid}`,
+        canonicalUrl: `https://www.xiaoyuzhoufm.com/podcast/${pid}`,
+        externalId: pid,
+        title: stringField(item, "title"),
+        author: stringField(item, "author"),
+        language: "zh-CN",
+        metadata: {
+          resolver: "xiaoyuzhou-search",
+          brief: stringField(item, "brief"),
+          subscriptionCount: numberField(item, "subscriptionCount"),
+          episodeCount: numberField(item, "episodeCount"),
+          latestEpisodePubDate: stringField(item, "latestEpisodePubDate")
+        }
+      } satisfies ResolvedSource;
+    })
+    .filter((source): source is ResolvedSource => source !== undefined);
+}
+
+function candidateUrlsFromText(input: string): string[] {
+  return Array.from(input.matchAll(/https?:\/\/[^\s<>"']+/gi), (match) => match[0]);
+}
+
+function isPodcastSourceUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (/xiaoyuzhoufm\.com$/i.test(parsed.hostname)) return parsed.pathname.startsWith("/podcast/");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stringField(input: Record<string, unknown>, key: string): string | undefined {
+  const value = input[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberField(input: Record<string, unknown>, key: string): number | undefined {
+  const value = input[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function watchCreatedReply(watch: Watch): string {
