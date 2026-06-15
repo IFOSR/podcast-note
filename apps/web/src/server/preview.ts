@@ -304,6 +304,7 @@ const server = Bun.serve({
     }
   }
 });
+server.ref();
 
 if (schedulerEnabled) {
   startMonitorScheduler();
@@ -1095,6 +1096,16 @@ function renderHome(context: SessionContext, notice: string | null | undefined, 
     .report { border: 1px solid #bfdbfe; background: #ffffff; border-radius: 18px; padding: 18px; margin-bottom: 16px; }
     .report-head { display: grid; gap: 8px; margin-bottom: 14px; }
     .report-title { font-size: 22px; margin: 0; letter-spacing: -0.02em; }
+    .episode-description { display: grid; gap: 12px; border: 1px solid #e0e7ff; border-radius: 16px; padding: 14px; background: linear-gradient(180deg, #ffffff, #f8fbff); color: #344054; }
+    .episode-description h4 { margin: 0; color: #0f172a; font-size: 14px; letter-spacing: 0.01em; }
+    .episode-description p { margin: 0; }
+    .description-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .description-section { border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px; background: #ffffff; }
+    .description-section.wide { grid-column: 1 / -1; }
+    .description-section ol, .description-section ul { margin: 8px 0 0; padding-left: 22px; }
+    .description-section li { margin: 5px 0; line-height: 1.55; }
+    .description-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .description-link { display: inline-flex; max-width: 100%; overflow-wrap: anywhere; color: #1d4ed8; font-weight: 700; }
     .player { display: grid; gap: 8px; padding: 12px; border: 1px solid #dbeafe; border-radius: 14px; background: #f8fbff; }
     .player audio { width: 100%; }
     .seek { border: 1px solid #bfdbfe; background: #eff6ff; color: #1d4ed8; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 900; cursor: pointer; }
@@ -1613,7 +1624,7 @@ function renderEpisodeReport(report: ReturnType<typeof summary>["episodeReports"
     <div class="report-head">
       <div class="meta"><span class="pill">${escapeHtml(report.source?.title ?? report.source?.type ?? "播客")}</span>${publishedAt ? `<span class="pill">节目发布时间：${escapeHtml(publishedAt)}</span>` : ""}${processedAt ? `<span class="pill paused">处理时间：${escapeHtml(processedAt)}</span>` : ""}<span class="pill paused">${escapeHtml(report.transcript?.language ?? report.episode.language ?? "unknown")}</span>${report.player.durationSec ? `<span class="pill paused">${escapeHtml(formatDuration(report.player.durationSec))}</span>` : ""}</div>
       <h3 class="report-title">${escapeHtml(report.episode.title)}</h3>
-      ${report.episode.description ? `<p class="muted">${escapeHtml(report.episode.description)}</p>` : ""}
+      ${renderEpisodeDescription(report.episode.description)}
       <div class="actions"><a class="button secondary" href="${escapeHtml(report.player.pageUrl)}" target="_blank" rel="noreferrer">打开原文</a>${report.player.audioUrl ? `<a class="button secondary" href="${escapeHtml(report.player.audioUrl)}" target="_blank" rel="noreferrer">打开音频</a>` : ""}</div>
     </div>
     ${report.player.audioUrl ? `<div class="player"><strong>音频核验</strong><audio id="${escapeHtml(playerId)}" controls preload="metadata" src="${escapeHtml(report.player.audioUrl)}"></audio><p class="muted small">点击章节或核心观点旁的时间戳，会跳到对应音频片段播放，用来核对总结和证据是否准确。</p></div>` : `<div class="empty">这集没有可直接播放的公开音频 URL，无法在页面内核验音频片段。</div>`}
@@ -1628,6 +1639,108 @@ function renderEpisodeReport(report: ReturnType<typeof summary>["episodeReports"
     <h4 class="section-title">核心观点与证据</h4>
     ${report.insights.length ? report.insights.map((item) => renderInsight(item, report.player.pageUrl, playerId)).join("") : `<div class="empty">${summary ? "这条历史处理结果保留了总结、章节和音频核验，但当前数据库里没有保留核心观点记录。" : "没有达到发布阈值的核心观点。"}</div>`}
   </article>`;
+}
+
+function renderEpisodeDescription(description?: string): string {
+  const parsed = parseEpisodeDescription(description);
+  if (!parsed) return "";
+  const sections = [
+    parsed.intro ? renderDescriptionSection("节目简介", `<p>${escapeHtml(parsed.intro)}</p>`, true) : "",
+    parsed.catalog.length ? renderDescriptionSection("目录", `<ol>${parsed.catalog.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>`) : "",
+    parsed.highlights.length ? renderDescriptionSection("本期要点", `<ol>${parsed.highlights.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>`, true) : "",
+    parsed.links.length ? renderDescriptionSection("相关链接", `<ul>${parsed.links.map((link) => `<li><a class="description-link" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">${escapeHtml(link)}</a></li>`).join("")}</ul>`) : "",
+    parsed.account ? renderDescriptionSection("公众号", `<p>${escapeHtml(parsed.account)}</p>`) : "",
+    parsed.keywords.length ? renderDescriptionSection("关键词", `<div class="description-tags">${parsed.keywords.map((keyword) => `<span class="entity">${escapeHtml(keyword)}</span>`).join("")}</div>`, true) : "",
+    parsed.remaining.length ? renderDescriptionSection("补充信息", `<ul>${parsed.remaining.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`, true) : ""
+  ].filter(Boolean).join("");
+  return `<section class="episode-description" aria-label="节目简介"><div class="description-grid">${sections}</div></section>`;
+}
+
+function renderDescriptionSection(title: string, body: string, wide = false): string {
+  return `<section class="description-section${wide ? " wide" : ""}"><h4>${escapeHtml(title)}</h4>${body}</section>`;
+}
+
+function parseEpisodeDescription(description?: string): {
+  intro?: string;
+  catalog: string[];
+  highlights: string[];
+  links: string[];
+  account?: string;
+  keywords: string[];
+  remaining: string[];
+} | undefined {
+  const text = normalizeDescriptionText(description);
+  if (!text) return undefined;
+  const introMatch = text.match(/(?:节目简介|简介)[：:]\s*([\s\S]*?)(?=\s*(?:目录|本期要点|要点|原文链接|公众号|关键词)[：:]|$)/);
+  const catalogMatch = text.match(/目录[：:]\s*([\s\S]*?)(?=\s*(?:本期要点|要点|原文链接|公众号|关键词)[：:]|$)/);
+  const highlightsMatch = text.match(/(?:本期要点|要点)[：:]\s*([\s\S]*?)(?=\s*(?:原文链接|公众号|关键词)[：:]|$)/);
+  const links = [...text.matchAll(/https?:\/\/[^\s，。；、)）]+/g)].map((match) => trimTrailingPunctuation(match[0]));
+  const account = text.match(/公众号[：:]\s*([^。；\n]+)/)?.[1]?.trim();
+  const keywordBlock = text.match(/关键词[：:]\s*([\s\S]*?)$/)?.[1]?.trim();
+  const intro = cleanDescriptionValue(introMatch?.[1]);
+  const catalog = numberedItems(catalogMatch?.[1]);
+  const highlights = numberedItems(highlightsMatch?.[1]);
+  const keywords = keywordBlock
+    ? keywordBlock.split(/[，,、；;\s]+/).map((item) => item.trim()).filter(Boolean).slice(0, 18)
+    : [];
+  const structured = Boolean(intro || catalog.length || highlights.length || links.length || account || keywords.length);
+  if (!structured) {
+    return {
+      intro: undefined,
+      catalog: [],
+      highlights: [],
+      links: [],
+      account: undefined,
+      keywords: [],
+      remaining: paragraphItems(text)
+    };
+  }
+  return {
+    intro,
+    catalog,
+    highlights,
+    links,
+    account,
+    keywords,
+    remaining: []
+  };
+}
+
+function normalizeDescriptionText(description?: string): string {
+  return (description ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>\s*<p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function cleanDescriptionValue(value?: string): string | undefined {
+  const cleaned = value?.replace(/\s+/g, " ").trim();
+  return cleaned || undefined;
+}
+
+function numberedItems(value?: string): string[] {
+  const cleaned = cleanDescriptionValue(value);
+  if (!cleaned) return [];
+  const matches = [...cleaned.matchAll(/(?:^|\s)(?:\d+|[一二三四五六七八九十]+)[.、]\s*([\s\S]*?)(?=\s+(?:\d+|[一二三四五六七八九十]+)[.、]\s*|$)/g)]
+    .map((match) => match[1]?.trim())
+    .filter((item): item is string => Boolean(item));
+  if (matches.length) return matches;
+  return paragraphItems(cleaned);
+}
+
+function paragraphItems(value: string): string[] {
+  return value.split(/\n+|[；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function trimTrailingPunctuation(value: string): string {
+  return value.replace(/[，。；、.)）]+$/g, "");
 }
 
 function renderInsight(item: ReturnType<typeof summary>["episodeReports"][number]["insights"][number], _pageUrl: string, playerId: string): string {

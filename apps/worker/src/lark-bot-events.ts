@@ -338,8 +338,12 @@ async function consumeLarkMessageEventsWithSdk(options: {
   });
   console.error(`[event] starting event_key=${options.context.eventKey} transport=sdk-ws`);
   await wsClient.start({ eventDispatcher });
+  const keepAlive = setInterval(() => {
+    if (process.exitCode) clearInterval(keepAlive);
+  }, 60 * 60 * 1000);
   await new Promise<void>((resolve) => {
     const shutdown = () => {
+      clearInterval(keepAlive);
       wsClient.close?.({});
       resolve();
     };
