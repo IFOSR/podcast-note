@@ -2,7 +2,8 @@ import type { Episode, EpisodeSummary, Source, TranscriptSegment, Watch } from "
 import QRCode from "qrcode";
 import { readFileSync } from "node:fs";
 import { stableId } from "../../../../packages/core/src/format.ts";
-import { createCodexInsightProvider, createVolcengineTranscriptProvider } from "../../../../packages/ai/src/index.ts";
+import { createCodexInsightProvider, createCodexIntentAssistantProvider, createVolcengineTranscriptProvider } from "../../../../packages/ai/src/index.ts";
+import type { IntentAssistantOutput } from "../../../../packages/ai/src/index.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../../packages/db/src/index.ts";
 import {
   createWatch,
@@ -16,7 +17,7 @@ import {
 } from "./m1-app.ts";
 import { processSourceInputs } from "../../../worker/src/process-sources.ts";
 import { runM1Once } from "../../../worker/src/m1-run-once.ts";
-import { deliverPendingLarkEpisodeResultsToAllInstallations } from "../../../worker/src/lark-delivery.ts";
+import { deliverPendingLarkEpisodeResultsToAllInstallations, deliverPendingWikiProposalSummaryToAllLarkInstallations } from "../../../worker/src/lark-delivery.ts";
 import {
   buildLarkBotOpenUrl,
   createLarkBotClient,
@@ -73,6 +74,13 @@ const server = Bun.serve({
       }
       if (url.pathname === "/api/agent-status") {
         return json({ ok: true, agentRun: currentImmediateAgentRun(context) });
+      }
+      if (url.pathname === "/api/assistant" && request.method === "POST") {
+        const form = await formDataOrEmpty(request);
+        const message = stringField(form, "message").trim();
+        if (!message) throw new Error("请输入你想让 Podcast Note 帮你做什么。");
+        const result = await analyzeUserIntent(context, message);
+        return json({ ok: true, result, html: renderAssistantResult(result) });
       }
       if (url.pathname === "/api/monitor-fragments") {
         return json(monitorFragments(context));
@@ -371,6 +379,78 @@ async function processWithRealProviders(input: {
   return results;
 }
 
+async function analyzeUserIntent(inputContext: SessionContext, message: string): Promise<IntentAssistantOutput> {
+  const provider = createCodexIntentAssistantProvider();
+  return provider.analyze({
+    message,
+    outputLanguage: "zh-CN",
+    context: {
+      workspaceName: inputContext.workspace.name,
+      activeWatches: listWatchCards({ repositories: repos, context: inputContext })
+        .slice(0, 20)
+        .map((watch) => ({
+          id: watch.id,
+          name: watch.name,
+          query: watch.query,
+          enabled: watch.enabled,
+          frequency: watch.frequency
+        })),
+      recentEpisodes: recentAssistantEpisodes(inputContext)
+    }
+  });
+}
+
+function recentAssistantEpisodes(inputContext: SessionContext): Array<{
+  id: string;
+  title: string;
+  oneLiner?: string;
+  pageUrl?: string;
+  publishedAt?: string;
+}> {
+  const rows = db.query(`
+    select
+      e.id,
+      e.title,
+      e.page_url,
+      e.published_at,
+      s.one_liner,
+      max(coalesce(s.created_at, t.created_at, e.updated_at, '')) as updated_at
+    from episodes e
+    left join episode_summaries s on s.episode_id = e.id
+    left join transcripts t on t.episode_id = e.id
+    where exists (
+      select 1
+      from processing_episode_statuses pes
+      join processing_runs pr on pr.id = pes.run_id
+      join watches w on w.id = pr.watch_id
+      where pes.episode_id = e.id
+        and w.workspace_id = ?
+    )
+    group by e.id
+    order by updated_at desc
+    limit 8
+  `).all(inputContext.workspace.id) as Array<Record<string, unknown>>;
+  return rows.map((row) => {
+    const item: {
+      id: string;
+      title: string;
+      oneLiner?: string;
+      pageUrl?: string;
+      publishedAt?: string;
+    } = {
+      id: String(row["id"]),
+      title: String(row["title"])
+    };
+    const oneLiner = optionalString(row["one_liner"]);
+    const pageUrl = optionalString(row["page_url"]);
+    const publishedAt = optionalString(row["published_at"]);
+    if (oneLiner) item.oneLiner = oneLiner;
+    if (pageUrl) item.pageUrl = pageUrl;
+    if (publishedAt) item.publishedAt = publishedAt;
+    return item;
+  });
+}
+
 function upsertMonitorWatch(inputContext: SessionContext, input: {
   name: string;
   topic: string;
@@ -465,20 +545,31 @@ async function runMonitorSchedulerTick(reason: "startup" | "interval" | "manual"
   }
 }
 
-async function deliverPendingLarkResultsAfterMonitorTick(): Promise<{ installations: number; sent: number; skipped: number; considered: number; failed: number } | undefined> {
+async function deliverPendingLarkResultsAfterMonitorTick(): Promise<{
+  episodeResults: { installations: number; sent: number; skipped: number; considered: number; failed: number };
+  wikiProposalSummary: { installations: number; sent: number; skipped: number; empty: number; proposalCount: number; failed: number };
+} | undefined> {
   const appId = larkConfiguredAppId();
   const appSecret = larkConfiguredAppSecret();
   if (!appId || !appSecret) return undefined;
   const installations = repos.listActiveLarkBotInstallationsForWorkspace(context.workspace.id, appId);
   if (installations.length === 0) return undefined;
   try {
-    return await deliverPendingLarkEpisodeResultsToAllInstallations({
+    const episodeResults = await deliverPendingLarkEpisodeResultsToAllInstallations({
       repositories: repos,
       clientFactory: () => createLarkBotClient({ appId, appSecret }),
       workspaceId: context.workspace.id,
       appId,
       limit: numberOption(undefined, process.env["LARK_DELIVER_PENDING_LIMIT"] ?? process.env["FEISHU_DELIVER_PENDING_LIMIT"], 50)
     });
+    const wikiProposalSummary = await deliverPendingWikiProposalSummaryToAllLarkInstallations({
+      repositories: repos,
+      clientFactory: () => createLarkBotClient({ appId, appSecret }),
+      workspaceId: context.workspace.id,
+      appId,
+      limit: numberOption(undefined, process.env["LARK_DELIVER_PENDING_PROPOSAL_LIMIT"] ?? process.env["FEISHU_DELIVER_PENDING_PROPOSAL_LIMIT"], 100)
+    });
+    return { episodeResults, wikiProposalSummary };
   } catch (error) {
     console.error(JSON.stringify({
       ok: false,
@@ -1050,7 +1141,8 @@ function renderHome(context: SessionContext, notice: string | null | undefined, 
     .stack { display: grid; gap: 16px; }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06); }
     label { display: block; font-weight: 700; font-size: 13px; margin: 12px 0 6px; }
-    input, select { width: 100%; border: 1px solid #d0d5dd; border-radius: 12px; padding: 11px 12px; font: inherit; background: white; color: var(--text); }
+    input, select, textarea { width: 100%; border: 1px solid #d0d5dd; border-radius: 12px; padding: 11px 12px; font: inherit; background: white; color: var(--text); }
+    textarea { min-height: 104px; resize: vertical; line-height: 1.55; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     button, .button { display: inline-flex; justify-content: center; align-items: center; border: 0; border-radius: 10px; padding: 10px 14px; background: var(--blue); color: white; font-weight: 800; text-decoration: none; cursor: pointer; }
     button[disabled] { cursor: wait; opacity: 0.58; filter: grayscale(0.2); }
@@ -1092,7 +1184,20 @@ function renderHome(context: SessionContext, notice: string | null | undefined, 
     .agent-step strong { display: block; margin-bottom: 3px; }
     .agent-live { display: none; margin-top: 10px; color: #1d4ed8; font-weight: 800; }
     .agent-live.active { display: block; }
+    .assistant-card { border-color: #bae6fd; background: linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%); }
+    .assistant-examples { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .assistant-example { border: 1px solid #bfdbfe; background: #ffffff; color: #1d4ed8; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 800; cursor: pointer; }
+    .assistant-result { display: none; margin-top: 14px; border: 1px solid #dbeafe; border-radius: 16px; padding: 14px; background: #ffffff; }
+    .assistant-result.active { display: grid; gap: 10px; }
+    .assistant-result.loading { color: #1d4ed8; font-weight: 800; }
+    .typing-indicator { display: inline-flex; align-items: center; gap: 8px; }
+    .typing-keyboard { display: inline-block; transform-origin: 50% 80%; animation: keyboard-tap 0.55s ease-in-out infinite; }
+    .assistant-answer { margin: 0; white-space: pre-wrap; }
+    .assistant-facts { display: flex; gap: 8px; flex-wrap: wrap; }
+    .assistant-json { display: none; }
+    .assistant-action-form { display: inline-flex; margin: 0; }
     @keyframes pulse { 50% { transform: scale(1.08); } }
+    @keyframes keyboard-tap { 0%, 100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(2px) rotate(-5deg); } }
     .report { border: 1px solid #bfdbfe; background: #ffffff; border-radius: 18px; padding: 18px; margin-bottom: 16px; }
     .report-head { display: grid; gap: 8px; margin-bottom: 14px; }
     .report-title { font-size: 22px; margin: 0; letter-spacing: -0.02em; }
@@ -1144,6 +1249,7 @@ function renderHome(context: SessionContext, notice: string | null | undefined, 
     <nav class="nav" aria-label="页面导航"><a class="${isMonitorPage ? "" : "active"}" href="/">即时处理</a><a class="${isMonitorPage ? "active" : ""}" href="/monitor">监控任务</a><a href="/integrations/feishu">飞书集成</a></nav>
   </header>
   ${notice ? `<p class="notice">${escapeHtml(notice)}</p>` : ""}
+  ${renderAssistantPanel()}
   ${isMonitorPage ? `
   <section class="card">
     <h2>监控一个目标</h2>
@@ -1237,6 +1343,51 @@ function renderHome(context: SessionContext, notice: string | null | undefined, 
       setBusyButton(form.querySelector("button[type='submit']"), true);
     });
   });
+
+  document.querySelectorAll("[data-assistant-example]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = document.querySelector("[data-assistant-form] textarea[name='message']");
+      if (!(input instanceof HTMLTextAreaElement) || !(button instanceof HTMLElement)) return;
+      input.value = button.getAttribute("data-assistant-example") || "";
+      input.focus();
+    });
+  });
+
+  document.querySelectorAll("[data-assistant-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!(form instanceof HTMLFormElement)) return;
+      const resultBox = document.querySelector("[data-assistant-result]");
+      const button = form.querySelector("button[type='submit']");
+      setBusyButton(button, true);
+      setAssistantResult('<span class="typing-indicator"><span class="typing-keyboard" aria-hidden="true">⌨️</span><span>正在敲键盘，Podcast Note 正在回答...</span></span>', "loading");
+      try {
+        const response = await fetch("/api/assistant", { method: "POST", body: new FormData(form), headers: { accept: "application/json" } });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || "意图分析失败");
+        }
+        const data = await response.json();
+        setAssistantResult(typeof data.html === "string" ? data.html : "没有返回可展示的结果。", "");
+        resultBox?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } catch (error) {
+        setAssistantResult('<p class="assistant-answer">分析失败：' + escapeClientHtml(error instanceof Error ? error.message : String(error)) + '</p>', "");
+      } finally {
+        setBusyButton(button, false);
+      }
+    });
+  });
+
+  function setAssistantResult(html, className) {
+    const resultBox = document.querySelector("[data-assistant-result]");
+    if (!(resultBox instanceof HTMLElement)) return;
+    resultBox.className = "assistant-result active" + (className ? " " + className : "");
+    resultBox.innerHTML = html;
+  }
+
+  function escapeClientHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  }
 
   function setBusyButton(button, busy) {
     if (!(button instanceof HTMLButtonElement)) return;
@@ -1509,6 +1660,80 @@ async function renderFeishuIntegrationPage(context: SessionContext, request: Req
 </main>
 </body>
 </html>`;
+}
+
+function renderAssistantPanel(): string {
+  return `<section class="card assistant-card full">
+    <h2>智能问答与意图识别</h2>
+    <p class="muted small">直接说你想做什么。Podcast Note 会用本地 Codex CLI 判断你是要处理链接、创建监控、查询状态，还是询问已有播客知识。</p>
+    <form data-assistant-form>
+      <label for="assistantMessage">你想让 Podcast Note 帮你做什么？</label>
+      <textarea id="assistantMessage" name="message" placeholder="例如：帮我监控小宇宙的硅谷101，每天检查 AI Agent 相关内容。"></textarea>
+      <div class="assistant-examples" aria-label="示例问题">
+        <button class="assistant-example" type="button" data-assistant-example="这个播客链接帮我处理一下：https://example.com/episode">处理一个链接</button>
+        <button class="assistant-example" type="button" data-assistant-example="帮我监控小宇宙的硅谷101，每天检查 AI Agent">创建监控</button>
+        <button class="assistant-example" type="button" data-assistant-example="现在有哪些监控任务？">查询状态</button>
+        <button class="assistant-example" type="button" data-assistant-example="最近播客里关于 AI Agent 商业化有什么结论？">问知识库</button>
+      </div>
+      <p><button type="submit" data-idle-label="分析意图" data-busy-label="正在分析">分析意图</button></p>
+    </form>
+    <div class="assistant-result" data-assistant-result></div>
+  </section>`;
+}
+
+function renderAssistantResult(result: IntentAssistantOutput): string {
+  const extracted = result.extracted;
+  const facts = [
+    `意图：${intentLabel(result.intent)}`,
+    `置信度：${Math.round(result.confidence * 100)}%`,
+    extracted.url ? `链接：${extracted.url}` : "",
+    extracted.target ? `目标：${extracted.target}` : "",
+    extracted.channel ? `频道：${extracted.channel}` : "",
+    extracted.keywords.length ? `关键词：${extracted.keywords.join(", ")}` : "",
+    extracted.frequency ? `频率：${frequencyLabel(extracted.frequency)}` : ""
+  ].filter(Boolean);
+  return `
+    <div class="assistant-facts">${facts.map((fact) => `<span class="pill paused">${escapeHtml(fact)}</span>`).join("")}</div>
+    <p class="assistant-answer">${escapeHtml(result.answer)}</p>
+    ${result.reasoning ? `<p class="muted small">判断依据：${escapeHtml(result.reasoning)}</p>` : ""}
+    ${renderAssistantAction(result.suggestedAction)}
+  `;
+}
+
+function renderAssistantAction(action: IntentAssistantOutput["suggestedAction"]): string {
+  if (action.type === "submit_process_link" && typeof action.payload["podcastUrl"] === "string") {
+    return `<form class="assistant-action-form" method="post" action="/api/process-link">
+      <input type="hidden" name="podcastUrl" value="${escapeHtml(action.payload["podcastUrl"])}" />
+      <button type="submit">${escapeHtml(action.label || "立即处理这个链接")}</button>
+    </form>`;
+  }
+  if (action.type === "submit_monitor_target") {
+    return `<form class="assistant-action-form" method="post" action="/api/monitor-target">
+      <input type="hidden" name="target" value="${escapeHtml(action.payload["target"] ?? "")}" />
+      <input type="hidden" name="channel" value="${escapeHtml(action.payload["channel"] ?? action.payload["target"] ?? "")}" />
+      <input type="hidden" name="keywords" value="${escapeHtml(action.payload["keywords"] ?? "")}" />
+      <input type="hidden" name="frequency" value="${escapeHtml(action.payload["frequency"] ?? "daily")}" />
+      <input type="hidden" name="maxEpisodes" value="${escapeHtml(action.payload["maxEpisodes"] ?? 3)}" />
+      <button type="submit">${escapeHtml(action.label || "创建监控任务")}</button>
+    </form>`;
+  }
+  if (action.type === "open_monitor_page") {
+    return `<p><a class="button secondary" href="/monitor">${escapeHtml(action.label || "打开监控任务")}</a></p>`;
+  }
+  if (action.type === "open_feishu_page") {
+    return `<p><a class="button secondary" href="/integrations/feishu">${escapeHtml(action.label || "打开飞书集成")}</a></p>`;
+  }
+  return "";
+}
+
+function intentLabel(intent: IntentAssistantOutput["intent"]): string {
+  if (intent === "process_episode") return "处理播客链接";
+  if (intent === "create_monitor") return "创建监控";
+  if (intent === "ask_knowledge") return "知识问答";
+  if (intent === "check_status") return "查询状态";
+  if (intent === "manage_monitor") return "管理监控";
+  if (intent === "help") return "使用帮助";
+  return "未知";
 }
 
 async function renderLarkBindSessionBox(bindSession: NonNullable<ReturnType<typeof repos.getLarkBindSession>>, status: ReturnType<typeof larkAuthStatus> | undefined): Promise<string> {

@@ -5,6 +5,7 @@ import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/
 import { createLarkBotClient, recordLarkBotInstalled } from "../../../packages/lark/src/index.ts";
 import { deliverPendingLarkEpisodeResults } from "./lark-delivery.ts";
 import { handleLarkBotCommand } from "./lark-command-router.ts";
+import { answerLarkKnowledgeQuestion } from "./lark-knowledge-answer.ts";
 
 export type LarkBotAddedEvent = {
   header?: {
@@ -137,6 +138,13 @@ export async function handleLarkMessageReceivedEvent(input: {
       event: input.event
     });
     if (command.handled) return;
+    const answer = await answerLarkKnowledgeQuestion({
+      repositories: input.context.repositories,
+      workspaceId: input.context.workspaceId,
+      client: input.context.client,
+      event: input.event
+    });
+    if (answer.handled) return;
   }
   const reply = larkBotMessageReplyText({
     chatType: input.event.chat_type,

@@ -1,5 +1,8 @@
 export type {
   EpisodeSummaryInput,
+  IntentAssistantInput,
+  IntentAssistantOutput,
+  IntentAssistantProvider,
   InsightProvider,
   TranscriptProvider,
   TranscriptionInput,
@@ -7,5 +10,5 @@ export type {
   WatchInsightInput
 } from "./types.ts";
 export { promptVersions } from "./types.ts";
-export { createCodexInsightProvider } from "./codex-provider.ts";
+export { createCodexInsightProvider, createCodexIntentAssistantProvider } from "./codex-provider.ts";
 export { createVolcengineTranscriptProvider } from "./volcengine-transcript-provider.ts";

@@ -9,8 +9,9 @@ import type { Episode, OutputLanguage, Source, Watch } from "../../../packages/c
 import type { ObjectStorageAdapter } from "../../../packages/storage/src/index.ts";
 import { putAudioCache, putTranscriptJson } from "../../../packages/storage/src/index.ts";
 import { createLarkBotClient } from "../../../packages/lark/src/index.ts";
-import { deliverEpisodeResultToAllLarkInstallations } from "./lark-delivery.ts";
+import { deliverEpisodeResultToAllLarkInstallations, deliverPendingWikiProposalSummaryToAllLarkInstallations } from "./lark-delivery.ts";
 import { markdownReport, processTranscript } from "./pipeline.ts";
+import { compileEpisodeToWiki, createDeepSeekTuiWikiProposalProvider } from "../../../packages/wiki/src/index.ts";
 
 export type UserWatchInput = {
   workspaceId?: string;
@@ -29,6 +30,11 @@ export type ProcessSourcesOptions = {
   watchPath?: string;
   sourcesPath?: string;
   outputDir?: string;
+  obsidianVault?: string;
+  wikiAutoApply?: boolean;
+  wikiMinConfidence?: number;
+  wikiMinGroundedness?: number;
+  wikiProposalProvider?: "deepseek-tui";
   maxEpisodesPerSource?: number;
 };
 
@@ -47,6 +53,11 @@ export type ProcessSourceInputsOptions = {
   watch: UserWatchInput;
   sources: UserSourcesInput;
   outputDir?: string;
+  obsidianVault?: string;
+  wikiAutoApply?: boolean;
+  wikiMinConfidence?: number;
+  wikiMinGroundedness?: number;
+  wikiProposalProvider?: "deepseek-tui";
   maxEpisodesPerSource?: number;
   runId?: string;
 };
@@ -72,6 +83,11 @@ export async function processSources(input: {
       watch: watchInput,
       sources: sourcesInput,
       outputDir: options.outputDir,
+      obsidianVault: options.obsidianVault,
+      wikiAutoApply: options.wikiAutoApply,
+      wikiMinConfidence: options.wikiMinConfidence,
+      wikiMinGroundedness: options.wikiMinGroundedness,
+      wikiProposalProvider: options.wikiProposalProvider,
       maxEpisodesPerSource: options.maxEpisodesPerSource
     }
   });
@@ -134,6 +150,13 @@ export async function processSourceInputs(input: {
             input.insightProvider
           );
           input.repositories?.saveProcessingResult(processed, watch, input.insightProvider.model);
+          await maybeCompileWiki({
+            repositories: input.repositories,
+            watch,
+            result: processed,
+            options,
+            summaryModel: input.insightProvider.model
+          });
           await maybeDeliverToLark({
             repositories: input.repositories,
             watch,
@@ -175,6 +198,72 @@ export async function processSourceInputs(input: {
   return results;
 }
 
+async function maybeCompileWiki(input: {
+  repositories?: Repositories;
+  watch: Watch;
+  result: Awaited<ReturnType<typeof processTranscript>>;
+  options: ProcessSourceInputsOptions;
+  summaryModel?: string;
+}): Promise<void> {
+  const vaultRoot = input.options.obsidianVault ?? process.env["PODCAST_NOTE_OBSIDIAN_VAULT"];
+  if (!vaultRoot) return;
+  const compiled = await compileEpisodeToWiki({
+    config: {
+      vaultRoot,
+      autoApply: input.options.wikiAutoApply ?? envBoolean("PODCAST_NOTE_WIKI_AUTO_APPLY"),
+      minConfidence: input.options.wikiMinConfidence ?? envNumber("PODCAST_NOTE_WIKI_MIN_CONFIDENCE"),
+      minGroundedness: input.options.wikiMinGroundedness ?? envNumber("PODCAST_NOTE_WIKI_MIN_GROUNDEDNESS"),
+      proposalProvider: wikiProposalProvider(input.options.wikiProposalProvider)
+    },
+    result: input.result,
+    watch: input.watch,
+    summaryModel: input.summaryModel
+  });
+  input.repositories?.recordWikiExport({
+    workspaceId: input.watch.workspaceId,
+    vaultRoot,
+    episodeId: input.result.episode.id,
+    watchId: input.watch.id,
+    exportType: "source_note",
+    filePath: compiled.sourceNotePath,
+    contentHash: compiled.sourceNoteHash,
+    status: compiled.sourceNoteStatus
+  });
+  for (const proposal of compiled.proposals) {
+    input.repositories?.upsertWikiUpdateProposal({
+      id: proposal.id,
+      workspaceId: proposal.workspaceId,
+      episodeId: proposal.episodeId,
+      insightId: proposal.insightId,
+      targetPath: proposal.targetPath,
+      proposalType: proposal.proposalType,
+      title: proposal.title,
+      rationale: proposal.rationale,
+      patch: proposal.patch as unknown as Record<string, unknown>,
+      status: proposal.status
+    });
+  }
+  for (const path of compiled.appliedPaths) {
+    input.repositories?.recordWikiExport({
+      workspaceId: input.watch.workspaceId,
+      vaultRoot,
+      episodeId: input.result.episode.id,
+      watchId: input.watch.id,
+      exportType: "wiki_page",
+      filePath: path,
+      contentHash: compiled.appliedHashes[path] ?? `${input.result.episode.id}:${path}`,
+      status: "written"
+    });
+  }
+}
+
+function wikiProposalProvider(option?: "deepseek-tui") {
+  const provider = option ?? process.env["PODCAST_NOTE_WIKI_PROPOSAL_PROVIDER"];
+  if (provider === "deepseek-tui") return createDeepSeekTuiWikiProposalProvider();
+  if (!provider) return undefined;
+  throw new Error(`Unsupported wiki proposal provider: ${provider}. Supported: deepseek-tui.`);
+}
+
 async function maybeDeliverToLark(input: {
   repositories?: Repositories;
   watch: Watch;
@@ -201,10 +290,17 @@ async function maybeDeliverToLark(input: {
       watch: input.watch,
       result: input.result
     });
+    const proposalSummary = await deliverPendingWikiProposalSummaryToAllLarkInstallations({
+      repositories: input.repositories,
+      clientFactory: () => createLarkBotClient({ appId, appSecret }),
+      workspaceId: input.watch.workspaceId,
+      appId
+    });
     console.log(JSON.stringify({
       ok: true,
       message: "Delivered episode result to Lark installations",
       ...delivery,
+      proposalSummary,
       episodeId: input.result.episode.id,
       watchId: input.watch.id
     }));
@@ -228,6 +324,19 @@ function ensureWorkspaceForWatch(repositories: Repositories, watch: Watch): void
   });
   const workspace = repositories.ensurePersonalWorkspaceForUser(user.id);
   watch.workspaceId = workspace.id;
+}
+
+function envBoolean(name: string): boolean | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  return value === "1" || value.toLowerCase() === "true";
+}
+
+function envNumber(name: string): number | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export function userWatchToSystemWatch(input: UserWatchInput): Watch {

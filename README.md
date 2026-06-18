@@ -103,6 +103,7 @@ Supported private-chat messages:
 - Send `状态` or `进度` to see monitor and queue counts.
 - Send `重试失败` to requeue failed episode-processing jobs in the current workspace.
 - Send `暂停 硅谷101` or `恢复 硅谷101` to pause or resume a matching monitor.
+- Ask a knowledge question such as `AI Agent 商业化为什么会走向企业工作流？`. If the current workspace has processed podcast summaries or published insights that match, the bot replies with cited evidence, episode links, and timestamps. If nothing matches, it says the knowledge base has no relevant processed material instead of repeating the binding confirmation.
 
 Team group delivery is intentionally not the primary path yet. The current production path is personal private-chat binding plus one-time delivery de-duplication, so every processed result is pushed once per active bound Feishu target.
 
@@ -146,6 +147,15 @@ VOLCENGINE_ASR_TIMEOUT_MS=3600000
 `VOLCENGINE_ASR_TIMEOUT_MS` defaults to 60 minutes as the base wait limit. For longer episodes, the worker automatically waits for the episode duration plus one extra hour.
 
 Codex insight extraction uses the non-interactive provider from `packages/ai/src/codex-provider.ts`. Make sure `codex exec` works in your local environment before running real processing. Long transcripts can take several minutes to summarize; `CODEX_INSIGHT_TIMEOUT_MS` defaults to 30 minutes.
+
+Wiki proposal generation can use DeepSeek TUI instead of the deterministic proposal builder:
+
+```bash
+PODCAST_NOTE_WIKI_PROPOSAL_PROVIDER=deepseek-tui
+DEEPSEEK_TUI_COMMAND="deepseek tui"
+```
+
+`DEEPSEEK_TUI_COMMAND=deepseek-tui` also works if your local executable is named that way. The provider calls `<command> exec --auto <prompt>`, does not prompt the user for confirmations, and still writes wiki synthesis updates as pending proposals unless auto-apply is enabled.
 
 ## Real CLI Flow
 

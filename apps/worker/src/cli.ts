@@ -1,5 +1,6 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { createCodexInsightProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
 import { connectorFor } from "../../../packages/connectors/src/index.ts";
 import type { Episode } from "../../../packages/core/src/types.ts";
@@ -8,7 +9,17 @@ import { processSources } from "./process-sources.ts";
 import { runM1Once } from "./m1-run-once.ts";
 import { consumeLarkBotAddedEvents, consumeLarkMessageEvents } from "./lark-bot-events.ts";
 import { createLarkBotClient, recordLarkBotInstalled } from "../../../packages/lark/src/index.ts";
-import { deliverPendingLarkEpisodeResultsToAllInstallations } from "./lark-delivery.ts";
+import { deliverPendingLarkEpisodeResultsToAllInstallations, deliverPendingWikiProposalSummaryToAllLarkInstallations } from "./lark-delivery.ts";
+import { buildSemanticSegments } from "../../../packages/core/src/segmenting.ts";
+import {
+  applyWikiUpdateProposals,
+  compileEpisodeToWiki,
+  createDeepSeekTuiWikiProposalProvider,
+  lintVault,
+  publishMarkdownToLark,
+  renderHealthReport,
+  updateManagedFile
+} from "../../../packages/wiki/src/index.ts";
 
 const command = process.argv[2] ?? "help";
 
@@ -65,8 +76,22 @@ if (command === "demo") {
         episodeId: flagValue("--episode-id"),
         limit
       });
+    } else if (entity === "wiki-exports") {
+      rows = repos.listWikiExports({
+        workspaceId: flagValue("--workspace-id"),
+        episodeId: flagValue("--episode-id"),
+        exportType: flagValue("--type") as Parameters<typeof repos.listWikiExports>[0]["exportType"],
+        limit
+      });
+    } else if (entity === "wiki-proposals") {
+      rows = repos.listWikiUpdateProposals({
+        workspaceId: flagValue("--workspace-id"),
+        episodeId: flagValue("--episode-id"),
+        status: flagValue("--status") as Parameters<typeof repos.listWikiUpdateProposals>[0]["status"],
+        limit
+      });
     } else {
-      fail("Usage: bun apps/worker/src/cli.ts query <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 20] [--format json] [--watch-id id] [--episode-id id]");
+      fail("Usage: bun apps/worker/src/cli.ts query <episodes|runs|insights|wiki-exports|wiki-proposals> [--db storage/podcast-note.sqlite] [--limit 20] [--format json]");
     }
 
     printRows(rows, format);
@@ -92,8 +117,34 @@ if (command === "demo") {
         episodeId: flagValue("--episode-id"),
         limit
       });
+    } else if (entity === "obsidian") {
+      const vaultRoot = flagValue("--vault") ?? process.env["PODCAST_NOTE_OBSIDIAN_VAULT"];
+      const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+      if (!vaultRoot) fail("Usage: bun apps/worker/src/cli.ts export obsidian --vault <path> [--workspace-id id] [--db storage/podcast-note.sqlite]");
+      rows = await exportProcessedEpisodesToObsidian({
+        repositories: repos,
+        vaultRoot,
+        workspaceId,
+        limit,
+        autoApply: booleanFlag("--auto-apply") ?? envBoolean("PODCAST_NOTE_WIKI_AUTO_APPLY"),
+        wikiProposalProvider: wikiProposalProvider()
+      });
+    } else if (entity === "wiki-exports") {
+      rows = repos.listWikiExports({
+        workspaceId: flagValue("--workspace-id"),
+        episodeId: flagValue("--episode-id"),
+        exportType: flagValue("--type") as Parameters<typeof repos.listWikiExports>[0]["exportType"],
+        limit
+      });
+    } else if (entity === "wiki-proposals") {
+      rows = repos.listWikiUpdateProposals({
+        workspaceId: flagValue("--workspace-id"),
+        episodeId: flagValue("--episode-id"),
+        status: flagValue("--status") as Parameters<typeof repos.listWikiUpdateProposals>[0]["status"],
+        limit
+      });
     } else {
-      fail("Usage: bun apps/worker/src/cli.ts export <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json] [--watch-id id] [--episode-id id]");
+      fail("Usage: bun apps/worker/src/cli.ts export <episodes|runs|insights|obsidian|wiki-exports|wiki-proposals> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json]");
     }
 
     const json = `${JSON.stringify(rows, null, 2)}\n`;
@@ -123,6 +174,172 @@ if (command === "demo") {
         ...results.map((result) => `- ${result.episodeTitle}: ${result.outputDir}`)
       ].join("\n")
     );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:proposal-status") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const id = process.argv[3];
+    const status = process.argv[4] as "pending" | "approved" | "applied" | "rejected" | "failed" | undefined;
+    if (!id || !status) fail("Usage: bun apps/worker/src/cli.ts wiki:proposal-status <proposal_id> <pending|approved|applied|rejected|failed> [--db storage/podcast-note.sqlite]");
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const row = repos.updateWikiUpdateProposalStatus(id, status);
+    if (!row) fail(`Proposal not found: ${id}`);
+    console.log(JSON.stringify({ ok: true, proposal: row }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:apply-proposals") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const vaultRoot = flagValue("--vault") ?? process.env["PODCAST_NOTE_OBSIDIAN_VAULT"];
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+    if (!vaultRoot) fail("Usage: bun apps/worker/src/cli.ts wiki:apply-proposals --vault <path> [--workspace-id id] [--status approved|pending]");
+    const status = (flagValue("--status") ?? "approved") as Parameters<ReturnType<typeof createRepositories>["listWikiUpdateProposals"]>[0]["status"];
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const proposals = repos.listWikiUpdateProposals({ workspaceId, status, limit: numberFlagValue("--limit") ?? 100 });
+    const applied = await applyWikiUpdateProposals({
+      vaultRoot,
+      proposals,
+      now: flagValue("--now")
+    });
+    for (const item of applied) {
+      repos.updateWikiUpdateProposalStatus(item.proposal.id, item.proposal.status);
+      if (item.proposal.status === "applied" && item.contentHash) {
+        repos.recordWikiExport({
+          workspaceId,
+          vaultRoot,
+          episodeId: item.proposal.episodeId,
+          exportType: "wiki_page",
+          filePath: item.path,
+          contentHash: item.contentHash,
+          status: "written"
+        });
+      }
+    }
+    const issues = await lintVault(vaultRoot);
+    await updateManagedFile({
+      vaultRoot,
+      relativePath: "health.md",
+      title: "Wiki Health",
+      marker: "health",
+      body: renderHealthReport(issues)
+    });
+    await updateManagedFile({
+      vaultRoot,
+      relativePath: "log.md",
+      title: "Knowledge Log",
+      marker: "log",
+      body: [
+        `## ${flagValue("--now") ?? new Date().toISOString()}`,
+        "",
+        `- Applied proposals: ${applied.length}`,
+        ...applied.map((item) => `- Updated: ${item.path}`)
+      ].join("\n")
+    });
+    console.log(JSON.stringify({
+      ok: true,
+      applied: applied.map((item) => ({
+        proposalId: item.proposal.id,
+        path: item.path,
+        status: item.proposal.status
+      }))
+    }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:brief") {
+  try {
+    const vaultRoot = flagValue("--vault") ?? process.env["PODCAST_NOTE_OBSIDIAN_VAULT"];
+    if (!vaultRoot) fail("Usage: bun apps/worker/src/cli.ts wiki:brief --vault <path> [--topic title] [--period weekly|topic]");
+    const topic = decodeCliText(flagValue("--topic") ?? "PodcastNote Brief");
+    const period = flagValue("--period") ?? "weekly";
+    const date = (flagValue("--date") ?? new Date().toISOString()).slice(0, 10);
+    const relativePath = period === "topic"
+      ? `50 Briefs/Topic/${date} - ${topic}.md`
+      : `50 Briefs/Weekly/${date} - ${topic}.md`;
+    const health = await readOptional(resolve(vaultRoot, "health.md"));
+    const log = await readOptional(resolve(vaultRoot, "log.md"));
+    const body = [
+      `BriefType:: ${period}`,
+      `Topic:: ${topic}`,
+      `Date:: ${date}`,
+      "",
+      "## 本期知识变化",
+      "",
+      extractRecentBullets(log ?? ""),
+      "",
+      "## Health",
+      "",
+      extractHealthSummary(health ?? ""),
+      "",
+      "## 来源与时间戳",
+      "",
+      "- 详见 Obsidian vault 的 `10 Sources/Podcasts` source notes 和 synthesis 页面引用。"
+    ].join("\n");
+    const write = await updateManagedFile({
+      vaultRoot,
+      relativePath,
+      title: topic,
+      marker: "brief",
+      body
+    });
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"];
+    if (dbPath) {
+      const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+      const repos = createRepositories(openPodcastNoteDb(dbPath));
+      repos.recordWikiExport({
+        workspaceId,
+        vaultRoot,
+        exportType: "brief",
+        filePath: write.relativePath,
+        contentHash: write.contentHash,
+        status: write.status
+      });
+    }
+    console.log(JSON.stringify({ ok: true, path: write.relativePath, status: write.status }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "lark:publish-markdown") {
+  try {
+    const markdownPath = process.argv[3];
+    if (!markdownPath) fail("Usage: bun apps/worker/src/cli.ts lark:publish-markdown <markdown-path> --target <doc-target> [--title title] [--db storage/podcast-note.sqlite]");
+    const target = flagValue("--target");
+    if (!target) fail("M4 publisher adapter is configured by --target. Use a lark-cli target or a file:// path in smoke tests.");
+    const title = flagValue("--title");
+    const result = await publishMarkdownToLark({
+      markdownPath: resolve(markdownPath),
+      title,
+      target,
+      publisher: {
+        publishMarkdown: async (input) => {
+          if (input.target?.startsWith("file://")) {
+            const output = resolve(input.target.slice("file://".length));
+            await writeFile(output, input.markdown, "utf8");
+            return { providerDocumentId: output, url: output };
+          }
+          return publishWithLarkCli({
+            target: input.target ?? "create:",
+            title: input.title,
+            markdownPath: resolve(markdownPath)
+          });
+        }
+      }
+    });
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    repos.recordWikiExport({
+      workspaceId,
+      vaultRoot: target,
+      exportType: "lark_doc",
+      filePath: result.url ?? result.providerDocumentId,
+      contentHash: result.id,
+      status: "written"
+    });
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -185,14 +402,21 @@ if (command === "demo") {
     const repositories = createRepositories(openPodcastNoteDb(dbPath));
     const installations = repositories.listActiveLarkBotInstallationsForWorkspace(workspaceId, appId);
     if (installations.length === 0) fail(`No active Lark bot installation found for workspace ${workspaceId}.`);
-    const result = await deliverPendingLarkEpisodeResultsToAllInstallations({
+    const episodeResults = await deliverPendingLarkEpisodeResultsToAllInstallations({
       repositories,
       clientFactory: () => createLarkBotClient({ appId, appSecret }),
       workspaceId,
       appId,
       limit: numberFlagValue("--limit") ?? 50
     });
-    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    const wikiProposalSummary = await deliverPendingWikiProposalSummaryToAllLarkInstallations({
+      repositories,
+      clientFactory: () => createLarkBotClient({ appId, appSecret }),
+      workspaceId,
+      appId,
+      limit: numberFlagValue("--proposal-limit") ?? 100
+    });
+    console.log(JSON.stringify({ ok: true, episodeResults, wikiProposalSummary }, null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -244,8 +468,12 @@ if (command === "demo") {
       "  resolve-audio-url <public-audio-or-episode-url>",
       "  transcribe-url <public-audio-or-episode-url>",
       "  query <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 20] [--format json] [--watch-id id] [--episode-id id]",
-      "  export <episodes|runs|insights> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json] [--watch-id id] [--episode-id id]",
-      "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs] [--db storage/podcast-note.sqlite]",
+      "  export <episodes|runs|insights|obsidian|wiki-exports|wiki-proposals> [--db storage/podcast-note.sqlite] [--limit 100] [--output export.json]",
+      "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs] [--obsidian-vault path] [--wiki-auto-apply] [--db storage/podcast-note.sqlite]",
+      "  wiki:proposal-status <proposal_id> <pending|approved|applied|rejected|failed>",
+      "  wiki:apply-proposals --vault <path> [--workspace-id id] [--status approved|pending]",
+      "  wiki:brief --vault <path> [--topic title] [--period weekly|topic]",
+      "  lark:publish-markdown <markdown-path> --target <file://path|create:|folder:token|wiki:space|update:doc> [--title title]",
       "  m1:run-once [--db storage/podcast-note.sqlite] [--workspace-id id] [--now ISO] [--polling-limit 100] [--processing-limit 10]",
       "  lark:events [--db storage/podcast-note.sqlite] --workspace-id id [--event-key im.chat.member.bot.added_v1]",
       "  lark:ws-check",
@@ -335,8 +563,26 @@ function readProcessSourcesOptions() {
     watchPath: flagValue("--watch") ?? "inputs/watch.json",
     sourcesPath: flagValue("--sources") ?? "inputs/sources.json",
     outputDir: flagValue("--output") ?? "outputs",
+    obsidianVault: flagValue("--obsidian-vault") ?? flagValue("--vault"),
+    wikiAutoApply: booleanFlag("--wiki-auto-apply"),
+    wikiMinConfidence: decimalFlagValue("--wiki-min-confidence"),
+    wikiMinGroundedness: decimalFlagValue("--wiki-min-groundedness"),
+    wikiProposalProvider: wikiProposalProviderName(),
     maxEpisodesPerSource: numberFlagValue("--max-episodes") ?? 10
   };
+}
+
+function wikiProposalProviderName(): "deepseek-tui" | undefined {
+  const provider = flagValue("--wiki-proposal-provider") ?? process.env["PODCAST_NOTE_WIKI_PROPOSAL_PROVIDER"];
+  if (!provider) return undefined;
+  if (provider === "deepseek-tui") return provider;
+  fail(`Unsupported wiki proposal provider: ${provider}. Supported: deepseek-tui.`);
+}
+
+function wikiProposalProvider() {
+  const provider = wikiProposalProviderName();
+  if (provider === "deepseek-tui") return createDeepSeekTuiWikiProposalProvider();
+  return undefined;
 }
 
 function flagValue(name: string): string | undefined {
@@ -389,4 +635,165 @@ function numberFlagValue(name: string): number | undefined {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) fail(`${name} must be a positive integer.`);
   return parsed;
+}
+
+function decimalFlagValue(name: string): number | undefined {
+  const value = flagValue(name);
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) fail(`${name} must be a decimal between 0 and 1.`);
+  return parsed;
+}
+
+function booleanFlag(name: string): boolean | undefined {
+  return process.argv.includes(name) ? true : undefined;
+}
+
+function envBoolean(name: string): boolean | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  return value === "1" || value.toLowerCase() === "true";
+}
+
+function publishWithLarkCli(input: {
+  target: string;
+  title: string;
+  markdownPath: string;
+}): { providerDocumentId: string; url?: string } {
+  const [mode, rawTarget = ""] = input.target.split(/:(.*)/s);
+  const command = mode === "update" ? "+update" : "+create";
+  const args = ["docs", command, "--markdown", `@${input.markdownPath}`];
+  if (command === "+update") {
+    if (!rawTarget) fail("For lark-cli update, use --target update:<doc-token-or-url>.");
+    args.push("--doc", rawTarget, "--mode", "overwrite", "--new-title", input.title);
+  } else {
+    args.push("--title", input.title);
+    if (mode === "wiki") {
+      if (!rawTarget) fail("For lark-cli wiki create, use --target wiki:<space-id>.");
+      args.push("--wiki-space", rawTarget);
+    } else if (mode === "folder") {
+      if (!rawTarget) fail("For lark-cli folder create, use --target folder:<folder-token>.");
+      args.push("--folder-token", rawTarget);
+    } else if (mode !== "create" && mode !== "") {
+      fail("Unsupported --target. Use file://path, create:, folder:<token>, wiki:<space-id>, or update:<doc>.");
+    }
+  }
+  const result = spawnSync("lark-cli", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.status !== 0) {
+    fail(`lark-cli docs ${command} failed: ${result.stderr || result.stdout}`);
+  }
+  const output = (result.stdout || "").trim();
+  const extractedDocumentId = extractLarkDocumentId(output) ?? output.slice(0, 200);
+  const providerDocumentId = extractedDocumentId || "lark-cli-doc";
+  return {
+    providerDocumentId,
+    url: extractLarkUrl(output)
+  };
+}
+
+function extractLarkUrl(output: string): string | undefined {
+  return output.match(/https:\/\/[^\s"']+/)?.[0];
+}
+
+function extractLarkDocumentId(output: string): string | undefined {
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    return String(parsed["document_id"] ?? parsed["doc_token"] ?? parsed["token"] ?? parsed["url"] ?? "") || undefined;
+  } catch {
+    return output.match(/(?:docx?|token|document_id)["':=\s]+([A-Za-z0-9_-]{8,})/)?.[1];
+  }
+}
+
+async function exportProcessedEpisodesToObsidian(input: {
+  repositories: ReturnType<typeof createRepositories>;
+  vaultRoot: string;
+  workspaceId: string;
+  limit: number;
+  autoApply?: boolean;
+  wikiProposalProvider?: ReturnType<typeof createDeepSeekTuiWikiProposalProvider>;
+}) {
+  const details = input.repositories.listProcessedEpisodeDetailsForWorkspace({
+    workspaceId: input.workspaceId,
+    limit: input.limit
+  });
+  const rows = [];
+  for (const detail of details) {
+    const watchId = detail.insights[0]?.watchId;
+    if (!watchId || !detail.summary) continue;
+    const watch = input.repositories.getWatchForWorkspace(input.workspaceId, watchId);
+    if (!watch) continue;
+    const compiled = await compileEpisodeToWiki({
+      config: {
+        vaultRoot: input.vaultRoot,
+        autoApply: input.autoApply,
+        proposalProvider: input.wikiProposalProvider
+      },
+      watch,
+      result: {
+        episode: detail.episode,
+        summary: detail.summary,
+        segments: buildSemanticSegments(detail.transcript?.segments ?? []),
+        insights: detail.insights
+      }
+    });
+    input.repositories.recordWikiExport({
+      workspaceId: input.workspaceId,
+      vaultRoot: input.vaultRoot,
+      episodeId: detail.episode.id,
+      watchId,
+      exportType: "source_note",
+      filePath: compiled.sourceNotePath,
+      contentHash: compiled.sourceNoteHash,
+      status: compiled.sourceNoteStatus
+    });
+    for (const proposal of compiled.proposals) {
+      input.repositories.upsertWikiUpdateProposal({
+        id: proposal.id,
+        workspaceId: proposal.workspaceId,
+        episodeId: proposal.episodeId,
+        insightId: proposal.insightId,
+        targetPath: proposal.targetPath,
+        proposalType: proposal.proposalType,
+        title: proposal.title,
+        rationale: proposal.rationale,
+        patch: proposal.patch as unknown as Record<string, unknown>,
+        status: proposal.status
+      });
+    }
+    rows.push({
+      episodeId: detail.episode.id,
+      title: detail.episode.title,
+      sourceNotePath: compiled.sourceNotePath,
+      proposalCount: compiled.proposals.length,
+      appliedCount: compiled.appliedPaths.length
+    });
+  }
+  return rows;
+}
+
+async function readOptional(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function extractRecentBullets(content: string): string {
+  const bullets = content.split("\n").filter((line) => line.startsWith("- ")).slice(-12);
+  return bullets.length > 0 ? bullets.join("\n") : "- 暂无已记录变更。";
+}
+
+function extractHealthSummary(content: string): string {
+  const lines = content.split("\n").filter((line) => /^(Score|Errors|Warnings)::/.test(line));
+  return lines.length > 0 ? lines.join("\n") : "Score:: unknown";
+}
+
+function decodeCliText(value: string): string {
+  if (!value.includes("\\u")) return value;
+  return value.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
 }

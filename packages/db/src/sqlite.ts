@@ -30,6 +30,7 @@ export function migrate(db: PodcastNoteDb): void {
     ensureM1WorkspaceSchema(db);
     ensureProcessingStatusSchema(db);
     ensureLarkAuthSchema(db);
+    ensureWikiSchema(db);
     return;
   }
 
@@ -42,6 +43,7 @@ export function migrate(db: PodcastNoteDb): void {
   ensureM1WorkspaceSchema(db);
   ensureProcessingStatusSchema(db);
   ensureLarkAuthSchema(db);
+  ensureWikiSchema(db);
 }
 
 function ensureM1WorkspaceSchema(db: PodcastNoteDb): void {
@@ -265,10 +267,11 @@ function ensureLarkAuthSchema(db: PodcastNoteDb): void {
     create table if not exists lark_delivery_records (
       id text primary key,
       workspace_id text not null references workspaces(id) on delete cascade,
-      watch_id text not null references watches(id) on delete cascade,
-      episode_id text not null references episodes(id) on delete cascade,
+      watch_id text references watches(id) on delete cascade,
+      episode_id text references episodes(id) on delete cascade,
       chat_id text not null,
-      delivery_type text not null check (delivery_type in ('episode_summary')),
+      delivery_type text not null check (delivery_type in ('episode_summary', 'wiki_pending_proposal_summary')),
+      delivery_key text,
       provider_message_id text not null,
       delivered_at text not null,
       unique(workspace_id, watch_id, episode_id, chat_id, delivery_type)
@@ -293,5 +296,95 @@ function ensureLarkAuthSchema(db: PodcastNoteDb): void {
 
     create index if not exists lark_pending_intents_chat_status_idx
       on lark_pending_intents (workspace_id, chat_id, status, created_at desc);
+  `);
+  migrateLarkDeliveryRecordsForProposalSummary(db);
+  db.exec(`
+    create unique index if not exists lark_delivery_records_workspace_chat_key_idx
+      on lark_delivery_records (workspace_id, chat_id, delivery_type, delivery_key)
+      where delivery_key is not null;
+  `);
+}
+
+function migrateLarkDeliveryRecordsForProposalSummary(db: PodcastNoteDb): void {
+  const table = db.query("select sql from sqlite_master where type = 'table' and name = 'lark_delivery_records'").get() as { sql?: string } | null;
+  const columns = db.query("pragma table_info(lark_delivery_records)").all() as Array<{ name: string }>;
+  const hasDeliveryKey = columns.some((column) => column.name === "delivery_key");
+  const supportsProposalSummary = table?.sql?.includes("wiki_pending_proposal_summary") ?? false;
+  const hasNullableEpisodeScope = table?.sql?.includes("watch_id text references") ?? false;
+  if (hasDeliveryKey && supportsProposalSummary && hasNullableEpisodeScope) return;
+  db.exec(`
+    pragma foreign_keys = off;
+    create table if not exists lark_delivery_records_next (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      watch_id text references watches(id) on delete cascade,
+      episode_id text references episodes(id) on delete cascade,
+      chat_id text not null,
+      delivery_type text not null check (delivery_type in ('episode_summary', 'wiki_pending_proposal_summary')),
+      delivery_key text,
+      provider_message_id text not null,
+      delivered_at text not null,
+      unique(workspace_id, watch_id, episode_id, chat_id, delivery_type)
+    );
+
+    insert or ignore into lark_delivery_records_next (
+      id, workspace_id, watch_id, episode_id, chat_id, delivery_type, delivery_key, provider_message_id, delivered_at
+    )
+    select id, workspace_id, watch_id, episode_id, chat_id, delivery_type, null, provider_message_id, delivered_at
+    from lark_delivery_records;
+
+    drop table lark_delivery_records;
+    alter table lark_delivery_records_next rename to lark_delivery_records;
+    create index if not exists lark_delivery_records_workspace_delivered_idx
+      on lark_delivery_records (workspace_id, delivered_at desc);
+    create unique index if not exists lark_delivery_records_workspace_chat_key_idx
+      on lark_delivery_records (workspace_id, chat_id, delivery_type, delivery_key)
+      where delivery_key is not null;
+    pragma foreign_keys = on;
+  `);
+}
+
+function ensureWikiSchema(db: PodcastNoteDb): void {
+  db.exec(`
+    create table if not exists wiki_exports (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      vault_root text not null,
+      episode_id text references episodes(id) on delete cascade,
+      watch_id text references watches(id) on delete set null,
+      export_type text not null check (export_type in ('source_note', 'brief', 'proposal', 'wiki_page', 'lark_doc')),
+      file_path text not null,
+      content_hash text not null,
+      status text not null check (status in ('written', 'skipped', 'failed')),
+      error text,
+      created_at text not null default (datetime('now')),
+      updated_at text not null default (datetime('now')),
+      unique (workspace_id, export_type, file_path)
+    );
+
+    create index if not exists wiki_exports_workspace_updated_idx
+      on wiki_exports (workspace_id, updated_at desc);
+    create index if not exists wiki_exports_episode_idx
+      on wiki_exports (episode_id, export_type);
+
+    create table if not exists wiki_update_proposals (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      episode_id text not null references episodes(id) on delete cascade,
+      insight_id text references insights(id) on delete cascade,
+      target_path text not null,
+      proposal_type text not null check (proposal_type in ('create_page', 'append_evidence', 'revise_summary', 'flag_conflict', 'add_crosslink')),
+      title text not null,
+      rationale text not null,
+      patch_json text not null,
+      status text not null check (status in ('pending', 'approved', 'applied', 'rejected', 'failed')),
+      created_at text not null default (datetime('now')),
+      updated_at text not null default (datetime('now'))
+    );
+
+    create index if not exists wiki_update_proposals_workspace_status_idx
+      on wiki_update_proposals (workspace_id, status, updated_at desc);
+    create index if not exists wiki_update_proposals_episode_idx
+      on wiki_update_proposals (episode_id, status);
   `);
 }

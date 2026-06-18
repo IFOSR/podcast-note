@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { stableId } from "../../core/src/format.ts";
 import type { EpisodeSummary, Insight, OutputLanguage, SemanticSegment } from "../../core/src/types.ts";
-import type { EpisodeSummaryInput, InsightProvider, WatchInsightInput } from "./types.ts";
+import type {
+  EpisodeSummaryInput,
+  InsightProvider,
+  IntentAssistantInput,
+  IntentAssistantOutput,
+  IntentAssistantProvider,
+  WatchInsightInput
+} from "./types.ts";
 import { promptVersions } from "./types.ts";
 
 type CodexInsightProviderOptions = {
@@ -30,6 +37,24 @@ type InsightResponse = {
     confidence: number;
   }>;
 };
+
+const intentValues = new Set<IntentAssistantOutput["intent"]>([
+  "process_episode",
+  "create_monitor",
+  "ask_knowledge",
+  "check_status",
+  "manage_monitor",
+  "help",
+  "unknown"
+]);
+
+const suggestedActionValues = new Set<IntentAssistantOutput["suggestedAction"]["type"]>([
+  "none",
+  "submit_process_link",
+  "submit_monitor_target",
+  "open_monitor_page",
+  "open_feishu_page"
+]);
 
 export function createCodexInsightProvider(options: CodexInsightProviderOptions = {}): InsightProvider {
   const command = options.command ?? process.env["CODEX_COMMAND"] ?? "codex";
@@ -81,6 +106,38 @@ export function createCodexInsightProvider(options: CodexInsightProviderOptions 
       });
 
       return normalizeInsights(output, input, model);
+    }
+  };
+}
+
+export function createCodexIntentAssistantProvider(options: CodexInsightProviderOptions = {}): IntentAssistantProvider {
+  const command = options.command ?? process.env["CODEX_COMMAND"] ?? "codex";
+  const model = options.model ?? process.env["CODEX_INTENT_MODEL"] ?? process.env["CODEX_INSIGHT_MODEL"] ?? "gpt-5.5";
+  const cwd = options.cwd ?? process.cwd();
+  const timeoutMs = options.timeoutMs ?? numberFromEnv("CODEX_INTENT_TIMEOUT_MS", 2 * 60 * 1000);
+
+  return {
+    name: "codex-intent-assistant",
+    model,
+    async analyze(input: IntentAssistantInput): Promise<IntentAssistantOutput> {
+      const output = await runCodexJson<IntentAssistantOutput>({
+        command,
+        model,
+        cwd,
+        timeoutMs,
+        schema: intentAssistantSchema,
+        prompt: [
+          intentAssistantSystemPrompt(input.outputLanguage),
+          "",
+          "Analyze the user message for Podcast Note. Return only JSON that matches the schema.",
+          "",
+          `User message: ${JSON.stringify(input.message)}`,
+          "",
+          `Product context: ${JSON.stringify(input.context ?? {})}`
+        ].join("\n")
+      });
+
+      return normalizeIntentAssistantOutput(output);
     }
   };
 }
@@ -275,6 +332,100 @@ function insightSystemPrompt(outputLanguage: OutputLanguage): string {
   ].join(" ");
 }
 
+function intentAssistantSystemPrompt(outputLanguage: OutputLanguage): string {
+  return [
+    "You are the intent and Q&A layer for Podcast Note, a podcast intelligence app.",
+    "Classify the user's intent, extract actionable fields, and answer directly when no backend action is required.",
+    "Supported backend actions are: process one concrete episode/link, create a monitoring target, open monitor management, or open Feishu integration.",
+    "Do not claim that an action has been executed; you may only suggest an action for the UI to submit.",
+    "If the user asks a knowledge question, answer from the supplied product context only and say clearly when the local knowledge base context is insufficient.",
+    "If the user provides a podcast URL, prefer process_episode for episode/page links and create_monitor for channel/feed/source URLs when the wording implies ongoing monitoring.",
+    `Output language: ${outputLanguage}.`
+  ].join(" ");
+}
+
+function normalizeIntentAssistantOutput(response: IntentAssistantOutput): IntentAssistantOutput {
+  const rawIntent = response.intent;
+  const intent = intentValues.has(rawIntent) ? rawIntent : "unknown";
+  const extracted = response.extracted && typeof response.extracted === "object" ? response.extracted : { keywords: [] };
+  const normalizedExtracted = {
+    url: optionalNonEmptyString(extracted.url),
+    target: optionalNonEmptyString(extracted.target),
+    channel: optionalNonEmptyString(extracted.channel),
+    keywords: Array.isArray(extracted.keywords)
+      ? extracted.keywords.map((keyword) => stringOrFallback(keyword, "")).filter(Boolean).slice(0, 12)
+      : [],
+    frequency: extracted.frequency === "realtime" || extracted.frequency === "daily" || extracted.frequency === "weekly"
+      ? extracted.frequency
+      : undefined
+  };
+  const suggestedAction = normalizeSuggestedAction(response.suggestedAction, intent, normalizedExtracted);
+  return {
+    intent,
+    confidence: clampScore(response.confidence),
+    reasoning: stringOrFallback(response.reasoning, ""),
+    answer: stringOrFallback(response.answer, "我还不能确定你的意图。你可以粘贴播客链接、描述想监控的节目，或直接提问。"),
+    extracted: normalizedExtracted,
+    suggestedAction
+  };
+}
+
+function normalizeSuggestedAction(
+  action: IntentAssistantOutput["suggestedAction"] | undefined,
+  intent: IntentAssistantOutput["intent"],
+  extracted: IntentAssistantOutput["extracted"]
+): IntentAssistantOutput["suggestedAction"] {
+  if (intent === "process_episode" && extracted.url) {
+    return {
+      type: "submit_process_link",
+      label: "立即处理这个链接",
+      payload: { podcastUrl: extracted.url }
+    };
+  }
+  if (intent === "create_monitor" && (extracted.url || extracted.target || extracted.channel)) {
+    return {
+      type: "submit_monitor_target",
+      label: "创建监控任务",
+      payload: {
+        target: extracted.target ?? extracted.url ?? "",
+        channel: extracted.channel ?? extracted.url ?? extracted.target ?? "",
+        keywords: extracted.keywords.join(", "),
+        frequency: extracted.frequency ?? "daily",
+        maxEpisodes: 3
+      }
+    };
+  }
+  if (intent === "check_status" || intent === "manage_monitor") {
+    return {
+      type: "open_monitor_page",
+      label: "打开监控任务",
+      payload: {}
+    };
+  }
+  const type = action?.type && suggestedActionValues.has(action.type) ? action.type : "none";
+  return {
+    type,
+    label: stringOrFallback(action?.label, type === "none" ? "无需操作" : "继续"),
+    payload: normalizePayload(action?.payload)
+  };
+}
+
+function normalizePayload(payload: unknown): Record<string, string | number | boolean> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  const normalized: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      normalized[key] = value;
+    }
+  }
+  return normalized;
+}
+
+function optionalNonEmptyString(value: unknown): string | undefined {
+  const normalized = stringOrFallback(value, "");
+  return normalized ? normalized : undefined;
+}
+
 function nearestSegment(segments: SemanticSegment[], timestampSec: number): SemanticSegment {
   const found = segments.find((segment) => timestampSec >= segment.startSec && timestampSec <= segment.endSec);
   if (found) return found;
@@ -419,6 +570,58 @@ const watchInsightsSchema = {
           },
           relevanceScore: { type: "number" },
           confidence: { type: "number" }
+        }
+      }
+    }
+  }
+};
+
+const intentAssistantSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "confidence", "reasoning", "answer", "extracted", "suggestedAction"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["process_episode", "create_monitor", "ask_knowledge", "check_status", "manage_monitor", "help", "unknown"]
+    },
+    confidence: { type: "number" },
+    reasoning: { type: "string" },
+    answer: { type: "string" },
+    extracted: {
+      type: "object",
+      additionalProperties: false,
+      required: ["keywords"],
+      properties: {
+        url: { type: "string" },
+        target: { type: "string" },
+        channel: { type: "string" },
+        keywords: {
+          type: "array",
+          items: { type: "string" }
+        },
+        frequency: { type: "string", enum: ["realtime", "daily", "weekly"] }
+      }
+    },
+    suggestedAction: {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "label", "payload"],
+      properties: {
+        type: {
+          type: "string",
+          enum: ["none", "submit_process_link", "submit_monitor_target", "open_monitor_page", "open_feishu_page"]
+        },
+        label: { type: "string" },
+        payload: {
+          type: "object",
+          additionalProperties: {
+            anyOf: [
+              { type: "string" },
+              { type: "number" },
+              { type: "boolean" }
+            ]
+          }
         }
       }
     }
