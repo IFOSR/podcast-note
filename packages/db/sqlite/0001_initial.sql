@@ -326,16 +326,20 @@ create index if not exists lark_bot_installations_workspace_updated_idx on lark_
 create table if not exists lark_delivery_records (
   id text primary key,
   workspace_id text not null references workspaces(id) on delete cascade,
-  watch_id text not null references watches(id) on delete cascade,
-  episode_id text not null references episodes(id) on delete cascade,
+  watch_id text references watches(id) on delete cascade,
+  episode_id text references episodes(id) on delete cascade,
   chat_id text not null,
-  delivery_type text not null check (delivery_type in ('episode_summary')),
+  delivery_type text not null check (delivery_type in ('episode_summary', 'wiki_pending_proposal_summary')),
+  delivery_key text,
   provider_message_id text not null,
   delivered_at text not null,
   unique(workspace_id, watch_id, episode_id, chat_id, delivery_type)
 );
 
 create index if not exists lark_delivery_records_workspace_delivered_idx on lark_delivery_records (workspace_id, delivered_at desc);
+create unique index if not exists lark_delivery_records_workspace_chat_key_idx
+  on lark_delivery_records (workspace_id, chat_id, delivery_type, delivery_key)
+  where delivery_key is not null;
 
 create table if not exists lark_pending_intents (
   id text primary key,

@@ -25,8 +25,12 @@ export type UsageEntityType = "inbox" | "episode" | "insight" | "brief" | "watch
 export type LarkBindSessionStatus = "pending" | "completed" | "expired" | "failed";
 export type LarkConnectionStatus = "active" | "reauth_required" | "revoked";
 export type LarkBotInstallationStatus = "active" | "disabled";
-export type LarkDeliveryType = "episode_summary";
+export type LarkDeliveryType = "episode_summary" | "wiki_pending_proposal_summary";
 export type LarkPendingIntentStatus = "pending" | "completed" | "cancelled" | "expired";
+export type WikiExportType = "source_note" | "brief" | "proposal" | "wiki_page" | "lark_doc";
+export type WikiExportStatus = "written" | "skipped" | "failed";
+export type WikiProposalType = "create_page" | "append_evidence" | "revise_summary" | "flag_conflict" | "add_crosslink";
+export type WikiProposalStatus = "pending" | "approved" | "applied" | "rejected" | "failed";
 
 export type Session = {
   id: string;
@@ -107,10 +111,11 @@ export type LarkBotInstallation = {
 export type LarkDeliveryRecord = {
   id: string;
   workspaceId: string;
-  watchId: string;
-  episodeId: string;
+  watchId?: string;
+  episodeId?: string;
   chatId: string;
   deliveryType: LarkDeliveryType;
+  deliveryKey?: string;
   providerMessageId: string;
   deliveredAt: string;
 };
@@ -127,6 +132,36 @@ export type LarkPendingIntent = {
   createdAt: string;
   completedAt?: string;
   error?: string;
+};
+
+export type WikiExport = {
+  id: string;
+  workspaceId: string;
+  vaultRoot: string;
+  episodeId?: string;
+  watchId?: string;
+  exportType: WikiExportType;
+  filePath: string;
+  contentHash: string;
+  status: WikiExportStatus;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WikiUpdateProposalRecord = {
+  id: string;
+  workspaceId: string;
+  episodeId: string;
+  insightId?: string;
+  targetPath: string;
+  proposalType: WikiProposalType;
+  title: string;
+  rationale: string;
+  patch: Record<string, unknown>;
+  status: WikiProposalStatus;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type WatchPoll = {
@@ -421,6 +456,20 @@ export function createRepositories(db: PodcastNoteDb) {
       providerMessageId: string;
       deliveredAt?: string;
     }) => createLarkDeliveryRecord(db, input),
+    getLarkDeliveryRecordByKey: (input: {
+      workspaceId: string;
+      chatId: string;
+      deliveryType: LarkDeliveryType;
+      deliveryKey: string;
+    }) => getLarkDeliveryRecordByKey(db, input),
+    createLarkDeliveryRecordByKey: (input: {
+      workspaceId: string;
+      chatId: string;
+      deliveryType: LarkDeliveryType;
+      deliveryKey: string;
+      providerMessageId: string;
+      deliveredAt?: string;
+    }) => createLarkDeliveryRecordByKey(db, input),
     createLarkPendingIntent: (input: {
       workspaceId: string;
       chatId: string;
@@ -438,8 +487,186 @@ export function createRepositories(db: PodcastNoteDb) {
     }) => getLatestPendingLarkIntent(db, input),
     completeLarkPendingIntent: (id: string, completedAt?: string) => completeLarkPendingIntent(db, id, completedAt),
     cancelLarkPendingIntent: (id: string, completedAt?: string, error?: string) => cancelLarkPendingIntent(db, id, completedAt, error),
-    expireLarkPendingIntents: (now?: string) => expireLarkPendingIntents(db, now)
+    expireLarkPendingIntents: (now?: string) => expireLarkPendingIntents(db, now),
+    recordWikiExport: (input: {
+      workspaceId: string;
+      vaultRoot: string;
+      episodeId?: string;
+      watchId?: string;
+      exportType: WikiExportType;
+      filePath: string;
+      contentHash: string;
+      status: WikiExportStatus;
+      error?: string;
+    }) => recordWikiExport(db, input),
+    listWikiExports: (options: { workspaceId?: string; episodeId?: string; exportType?: WikiExportType; limit?: number } = {}) =>
+      listWikiExports(db, options),
+    upsertWikiUpdateProposal: (input: {
+      id: string;
+      workspaceId: string;
+      episodeId: string;
+      insightId?: string;
+      targetPath: string;
+      proposalType: WikiProposalType;
+      title: string;
+      rationale: string;
+      patch: Record<string, unknown>;
+      status: WikiProposalStatus;
+    }) => upsertWikiUpdateProposal(db, input),
+    listWikiUpdateProposals: (options: { workspaceId?: string; episodeId?: string; status?: WikiProposalStatus; limit?: number } = {}) =>
+      listWikiUpdateProposals(db, options),
+    updateWikiUpdateProposalStatus: (id: string, status: WikiProposalStatus) => updateWikiUpdateProposalStatus(db, id, status)
   };
+}
+
+function recordWikiExport(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  vaultRoot: string;
+  episodeId?: string;
+  watchId?: string;
+  exportType: WikiExportType;
+  filePath: string;
+  contentHash: string;
+  status: WikiExportStatus;
+  error?: string;
+}): WikiExport {
+  const id = stableId("wiki_export", `${input.workspaceId}:${input.exportType}:${input.filePath}`);
+  db.query(`
+    insert into wiki_exports (
+      id, workspace_id, vault_root, episode_id, watch_id, export_type, file_path,
+      content_hash, status, error
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(workspace_id, export_type, file_path) do update set
+      vault_root = excluded.vault_root,
+      episode_id = excluded.episode_id,
+      watch_id = excluded.watch_id,
+      content_hash = excluded.content_hash,
+      status = excluded.status,
+      error = excluded.error,
+      updated_at = datetime('now')
+  `).run(
+    id,
+    input.workspaceId,
+    input.vaultRoot,
+    input.episodeId ?? null,
+    input.watchId ?? null,
+    input.exportType,
+    input.filePath,
+    input.contentHash,
+    input.status,
+    input.error ?? null
+  );
+  const row = db.query("select * from wiki_exports where id = ?").get(id) as Record<string, unknown> | null;
+  if (row) return wikiExportFromRow(row);
+  const fallback = db.query(`
+    select * from wiki_exports where workspace_id = ? and export_type = ? and file_path = ?
+  `).get(input.workspaceId, input.exportType, input.filePath) as Record<string, unknown> | null;
+  if (!fallback) throw new Error(`Failed to record wiki export ${id}`);
+  return wikiExportFromRow(fallback);
+}
+
+function listWikiExports(db: PodcastNoteDb, options: {
+  workspaceId?: string;
+  episodeId?: string;
+  exportType?: WikiExportType;
+  limit?: number;
+}): WikiExport[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (options.workspaceId) {
+    conditions.push("workspace_id = ?");
+    params.push(options.workspaceId);
+  }
+  if (options.episodeId) {
+    conditions.push("episode_id = ?");
+    params.push(options.episodeId);
+  }
+  if (options.exportType) {
+    conditions.push("export_type = ?");
+    params.push(options.exportType);
+  }
+  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+  const rows = db.query(`
+    select * from wiki_exports ${where} order by updated_at desc limit ?
+  `).all(...params, normalizeLimit(options.limit)) as Array<Record<string, unknown>>;
+  return rows.map(wikiExportFromRow);
+}
+
+function upsertWikiUpdateProposal(db: PodcastNoteDb, input: {
+  id: string;
+  workspaceId: string;
+  episodeId: string;
+  insightId?: string;
+  targetPath: string;
+  proposalType: WikiProposalType;
+  title: string;
+  rationale: string;
+  patch: Record<string, unknown>;
+  status: WikiProposalStatus;
+}): WikiUpdateProposalRecord {
+  db.query(`
+    insert into wiki_update_proposals (
+      id, workspace_id, episode_id, insight_id, target_path, proposal_type,
+      title, rationale, patch_json, status
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      target_path = excluded.target_path,
+      proposal_type = excluded.proposal_type,
+      title = excluded.title,
+      rationale = excluded.rationale,
+      patch_json = excluded.patch_json,
+      status = excluded.status,
+      updated_at = datetime('now')
+  `).run(
+    input.id,
+    input.workspaceId,
+    input.episodeId,
+    input.insightId ?? null,
+    input.targetPath,
+    input.proposalType,
+    input.title,
+    input.rationale,
+    JSON.stringify(input.patch),
+    input.status
+  );
+  const row = db.query("select * from wiki_update_proposals where id = ?").get(input.id) as Record<string, unknown> | null;
+  if (!row) throw new Error(`Failed to upsert wiki proposal ${input.id}`);
+  return wikiUpdateProposalFromRow(row);
+}
+
+function listWikiUpdateProposals(db: PodcastNoteDb, options: {
+  workspaceId?: string;
+  episodeId?: string;
+  status?: WikiProposalStatus;
+  limit?: number;
+}): WikiUpdateProposalRecord[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (options.workspaceId) {
+    conditions.push("workspace_id = ?");
+    params.push(options.workspaceId);
+  }
+  if (options.episodeId) {
+    conditions.push("episode_id = ?");
+    params.push(options.episodeId);
+  }
+  if (options.status) {
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+  const rows = db.query(`
+    select * from wiki_update_proposals ${where} order by updated_at desc limit ?
+  `).all(...params, normalizeLimit(options.limit)) as Array<Record<string, unknown>>;
+  return rows.map(wikiUpdateProposalFromRow);
+}
+
+function updateWikiUpdateProposalStatus(db: PodcastNoteDb, id: string, status: WikiProposalStatus): WikiUpdateProposalRecord | undefined {
+  db.query(`
+    update wiki_update_proposals set status = ?, updated_at = datetime('now') where id = ?
+  `).run(status, id);
+  const row = db.query("select * from wiki_update_proposals where id = ?").get(id) as Record<string, unknown> | null;
+  return row ? wikiUpdateProposalFromRow(row) : undefined;
 }
 
 function createLarkBindSession(db: PodcastNoteDb, input: {
@@ -663,6 +890,20 @@ function getLarkDeliveryRecord(db: PodcastNoteDb, input: {
   return row ? larkDeliveryRecordFromRow(row) : undefined;
 }
 
+function getLarkDeliveryRecordByKey(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  chatId: string;
+  deliveryType: LarkDeliveryType;
+  deliveryKey: string;
+}): LarkDeliveryRecord | undefined {
+  const row = db.query(`
+    select * from lark_delivery_records
+    where workspace_id = ? and chat_id = ? and delivery_type = ? and delivery_key = ?
+    limit 1
+  `).get(input.workspaceId, input.chatId, input.deliveryType, input.deliveryKey) as Record<string, unknown> | null;
+  return row ? larkDeliveryRecordFromRow(row) : undefined;
+}
+
 function createLarkDeliveryRecord(db: PodcastNoteDb, input: {
   workspaceId: string;
   watchId: string;
@@ -676,8 +917,8 @@ function createLarkDeliveryRecord(db: PodcastNoteDb, input: {
   const id = stableId("lark_delivery", `${input.workspaceId}:${input.watchId}:${input.episodeId}:${input.chatId}:${input.deliveryType}`);
   db.query(`
     insert into lark_delivery_records (
-      id, workspace_id, watch_id, episode_id, chat_id, delivery_type, provider_message_id, delivered_at
-    ) values (?, ?, ?, ?, ?, ?, ?, ?)
+      id, workspace_id, watch_id, episode_id, chat_id, delivery_type, delivery_key, provider_message_id, delivered_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
     on conflict(workspace_id, watch_id, episode_id, chat_id, delivery_type) do nothing
   `).run(
     id,
@@ -686,11 +927,41 @@ function createLarkDeliveryRecord(db: PodcastNoteDb, input: {
     input.episodeId,
     input.chatId,
     input.deliveryType,
+    null,
     input.providerMessageId,
     deliveredAt
   );
   const record = getLarkDeliveryRecord(db, input);
   if (!record) throw new Error(`Failed to create Lark delivery record for episode ${input.episodeId}`);
+  return record;
+}
+
+function createLarkDeliveryRecordByKey(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  chatId: string;
+  deliveryType: LarkDeliveryType;
+  deliveryKey: string;
+  providerMessageId: string;
+  deliveredAt?: string;
+}): LarkDeliveryRecord {
+  const deliveredAt = input.deliveredAt ?? new Date().toISOString();
+  const id = stableId("lark_delivery", `${input.workspaceId}:${input.chatId}:${input.deliveryType}:${input.deliveryKey}`);
+  db.query(`
+    insert into lark_delivery_records (
+      id, workspace_id, watch_id, episode_id, chat_id, delivery_type, delivery_key, provider_message_id, delivered_at
+    ) values (?, ?, null, null, ?, ?, ?, ?, ?)
+    on conflict(workspace_id, chat_id, delivery_type, delivery_key) do nothing
+  `).run(
+    id,
+    input.workspaceId,
+    input.chatId,
+    input.deliveryType,
+    input.deliveryKey,
+    input.providerMessageId,
+    deliveredAt
+  );
+  const record = getLarkDeliveryRecordByKey(db, input);
+  if (!record) throw new Error(`Failed to create Lark delivery record for key ${input.deliveryKey}`);
   return record;
 }
 
@@ -2119,10 +2390,11 @@ function larkDeliveryRecordFromRow(row: Record<string, unknown>): LarkDeliveryRe
   return {
     id: String(row["id"]),
     workspaceId: String(row["workspace_id"]),
-    watchId: String(row["watch_id"]),
-    episodeId: String(row["episode_id"]),
+    watchId: nullableString(row["watch_id"]),
+    episodeId: nullableString(row["episode_id"]),
     chatId: String(row["chat_id"]),
     deliveryType: String(row["delivery_type"]) as LarkDeliveryType,
+    deliveryKey: nullableString(row["delivery_key"]),
     providerMessageId: String(row["provider_message_id"]),
     deliveredAt: String(row["delivered_at"])
   };
@@ -2200,6 +2472,40 @@ function insightFeedbackFromRow(row: Record<string, unknown>): InsightFeedback {
     action: String(row["action"]) as InsightFeedbackAction,
     note: nullableString(row["note"]),
     createdAt: String(row["created_at"])
+  };
+}
+
+function wikiExportFromRow(row: Record<string, unknown>): WikiExport {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    vaultRoot: String(row["vault_root"]),
+    episodeId: nullableString(row["episode_id"]),
+    watchId: nullableString(row["watch_id"]),
+    exportType: String(row["export_type"]) as WikiExportType,
+    filePath: String(row["file_path"]),
+    contentHash: String(row["content_hash"]),
+    status: String(row["status"]) as WikiExportStatus,
+    error: nullableString(row["error"]),
+    createdAt: String(row["created_at"]),
+    updatedAt: String(row["updated_at"])
+  };
+}
+
+function wikiUpdateProposalFromRow(row: Record<string, unknown>): WikiUpdateProposalRecord {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    episodeId: String(row["episode_id"]),
+    insightId: nullableString(row["insight_id"]),
+    targetPath: String(row["target_path"]),
+    proposalType: String(row["proposal_type"]) as WikiProposalType,
+    title: String(row["title"]),
+    rationale: String(row["rationale"]),
+    patch: parseJsonObject(row["patch_json"]),
+    status: String(row["status"]) as WikiProposalStatus,
+    createdAt: String(row["created_at"]),
+    updatedAt: String(row["updated_at"])
   };
 }
 

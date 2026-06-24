@@ -38,9 +38,12 @@
     "check:lark-command-confirmation": "bun apps/worker/src/check-lark-command-confirmation.ts",
     "check:lark-command-natural-watch": "bun apps/worker/src/check-lark-command-natural-watch.ts",
     "check:lark-command-ops": "bun apps/worker/src/check-lark-command-ops.ts",
+    "check:lark-knowledge-answer": "bun apps/worker/src/check-lark-knowledge-answer.ts",
     "check:lark-delivery": "bun apps/worker/src/check-lark-delivery.ts",
     "check:lark-unified-auth": "bun apps/worker/src/check-lark-unified-auth.ts",
     "check:lark-preview-auth": "bun apps/worker/src/check-lark-preview-auth.ts",
+    "check:obsidian-wiki": "bun apps/worker/src/check-obsidian-wiki.ts",
+    "check:codex-intent-assistant": "bun apps/worker/src/check-codex-intent-assistant.ts",
     "check:preview-ui": "bun apps/worker/src/check-preview-ui.ts"
   },
   "workspaces": [

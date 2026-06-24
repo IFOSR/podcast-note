@@ -39,6 +39,10 @@
     },
     "packages/storage": {
       "name": "@podcast-note/storage",
+      "version": "0.0.0",
+    },
+    "packages/wiki": {
+      "name": "@podcast-note/wiki",
       "version": "0.0.1",
     },
   },
@@ -58,6 +62,8 @@
     "@podcast-note/storage": ["@podcast-note/storage@workspace:packages/storage"],
 
     "@podcast-note/web": ["@podcast-note/web@workspace:apps/web"],
+
+    "@podcast-note/wiki": ["@podcast-note/wiki@workspace:packages/wiki"],
 
     "@podcast-note/worker": ["@podcast-note/worker@workspace:apps/worker"],
 
