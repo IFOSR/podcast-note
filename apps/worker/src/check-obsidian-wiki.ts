@@ -1,10 +1,10 @@
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { $ } from "bun";
 import { openPodcastNoteDb, createRepositories } from "../../../packages/db/src/index.ts";
 import type { Episode, EpisodeProcessingResult, Watch } from "../../../packages/core/src/types.ts";
-import { compileEpisodeToWiki, createDeepSeekTuiWikiProposalProvider } from "../../../packages/wiki/src/index.ts";
+import { applyWikiUpdateProposals, compileEpisodeToWiki, createDeepSeekTuiWikiProposalProvider } from "../../../packages/wiki/src/index.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "podcast-note-wiki-"));
 const vaultRoot = join(dir, "vault");
@@ -152,6 +152,20 @@ if (m1m2.proposals.length < 3) throw new Error(`M2 expected at least 3 proposals
 const sourceContent = await readFile(join(vaultRoot, m1m2.sourceNotePath), "utf8");
 if (!sourceContent.includes("type: podcast_episode")) throw new Error("M1 source note missing frontmatter.");
 if (!sourceContent.includes("InsightID:: insight_wiki_smoke")) throw new Error("M1 source note missing insight provenance.");
+const idempotencyCheck = await compileEpisodeToWiki({
+  config: {
+    vaultRoot,
+    autoApply: false,
+    now: "2026-06-17T12:01:00.000Z"
+  },
+  result,
+  watch,
+  transcriptProvider: "smoke",
+  summaryModel: "smoke"
+});
+if (idempotencyCheck.sourceNoteStatus === "failed") throw new Error("M1 deterministic source note re-export produced a false conflict.");
+const sourceDirFiles = await readdir(join(vaultRoot, "10 Sources/Podcasts/2026"));
+if (sourceDirFiles.some((file) => file.includes(".conflict-"))) throw new Error("M1 deterministic source note re-export created a conflict file.");
 await writeFile(join(vaultRoot, m1m2.sourceNotePath), `${sourceContent}\nUser private note should not be overwritten.\n`, "utf8");
 const conflictCheck = await compileEpisodeToWiki({
   config: {
@@ -252,6 +266,31 @@ if (llmProposalCheck.proposals[0]?.targetPath !== "40 Claims/DeepSeek Agent Work
   throw new Error("DeepSeek TUI provider did not use model proposal target path.");
 }
 
+const unsafeVaultRoot = join(dir, "unsafe-vault");
+const unsafeProposal = {
+  id: "wiki_prop_unsafe_path",
+  workspaceId: workspace.id,
+  episodeId: episode.id,
+  targetPath: "../outside.md",
+  proposalType: "append_evidence" as const,
+  title: "Unsafe path should fail",
+  rationale: "Regression coverage for proposal path traversal.",
+  patch: {
+    section: "支持证据",
+    operation: "append" as const,
+    markdown: "- unsafe write",
+    citations: [{ episodeId: episode.id }]
+  },
+  status: "approved" as const
+};
+await applyWikiUpdateProposals({
+  vaultRoot: unsafeVaultRoot,
+  proposals: [unsafeProposal],
+  now: "2026-06-17T12:20:00.000Z"
+});
+if (unsafeProposal.status !== "failed") throw new Error("M3 unsafe proposal path was not marked failed.");
+if (await exists(join(dir, "outside.md"))) throw new Error("M3 unsafe proposal wrote outside the vault.");
+
 for (const proposal of m1m2.proposals) {
   repos.upsertWikiUpdateProposal({
     id: proposal.id,
@@ -320,3 +359,12 @@ const cliHealth = await readFile(join(cliVaultRoot, "health.md"), "utf8");
 if (!cliHealth.includes("Score::")) throw new Error("CLI export obsidian smoke failed.");
 
 console.log("Obsidian wiki M1-M4 E2E checks passed.");
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { EpisodeProcessingResult, Watch } from "../../core/src/types.ts";
 import type { WikiExportStatus, WikiVaultConfig } from "./types.ts";
 import { contentHash, isoDate, slugifyPathPart } from "./format.ts";
@@ -77,6 +77,7 @@ export async function writeEpisodeSourceNote(input: {
     vaultRoot: input.config.vaultRoot,
     absolutePath,
     content: rendered,
+    overwriteWhenOnlyManagedContent: true,
     replaceManagedBlock: false
   });
 }
@@ -85,10 +86,11 @@ export async function writeManagedMarkdown(input: {
   vaultRoot: string;
   absolutePath: string;
   content: string;
+  overwriteWhenOnlyManagedContent?: boolean;
   replaceManagedBlock?: boolean;
 }): Promise<VaultWriteResult> {
   const absolutePath = resolve(input.absolutePath);
-  const relativePath = relative(resolve(input.vaultRoot), absolutePath);
+  const relativePath = safeRelativePath(input.vaultRoot, absolutePath);
   await mkdir(dirname(absolutePath), { recursive: true });
   const hash = contentHash(input.content);
   const existing = await readOptional(absolutePath);
@@ -98,6 +100,10 @@ export async function writeManagedMarkdown(input: {
   }
   if (existing === input.content) {
     return { absolutePath, relativePath, contentHash: hash, status: "skipped" };
+  }
+  if (input.overwriteWhenOnlyManagedContent && hasManagedBlock(existing) && hasNoUserContentOutsideManagedBlock(existing)) {
+    await writeFile(absolutePath, input.content, "utf8");
+    return { absolutePath, relativePath, contentHash: hash, status: "written" };
   }
   if (input.replaceManagedBlock !== false && hasManagedBlock(existing) && hasManagedBlock(input.content)) {
     const merged = replaceManagedBlock(existing, input.content);
@@ -122,7 +128,7 @@ export async function updateManagedFile(input: {
   marker: string;
   body: string;
 }): Promise<VaultWriteResult> {
-  const absolutePath = join(input.vaultRoot, input.relativePath);
+  const absolutePath = safeVaultPath(input.vaultRoot, input.relativePath);
   const start = `<!-- podcast-note:${input.marker}:start -->`;
   const end = `<!-- podcast-note:${input.marker}:end -->`;
   const fallback = `# ${input.title}\n\n${start}\n\n${input.body.trim()}\n\n${end}\n`;
@@ -134,10 +140,33 @@ export async function updateManagedFile(input: {
   await writeFile(absolutePath, next, "utf8");
   return {
     absolutePath,
-    relativePath: relative(resolve(input.vaultRoot), absolutePath),
+    relativePath: safeRelativePath(input.vaultRoot, absolutePath),
     contentHash: contentHash(next),
     status: existing === next ? "skipped" : "written"
   };
+}
+
+export function safeVaultPath(vaultRoot: string, relativePath: string): string {
+  const normalizedInput = relativePath.replace(/\\/g, "/");
+  if (
+    normalizedInput.includes("\0")
+    || normalizedInput.startsWith("/")
+    || /^[A-Za-z]:\//.test(normalizedInput)
+  ) {
+    throw new Error(`Unsafe vault path: ${relativePath}`);
+  }
+  const absolutePath = resolve(vaultRoot, normalizedInput);
+  safeRelativePath(vaultRoot, absolutePath);
+  return absolutePath;
+}
+
+function safeRelativePath(vaultRoot: string, absolutePath: string): string {
+  const root = resolve(vaultRoot);
+  const rel = relative(root, resolve(absolutePath));
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`Refusing to write outside Obsidian vault: ${absolutePath}`);
+  }
+  return rel;
 }
 
 async function readOptional(path: string): Promise<string | undefined> {
@@ -171,6 +200,26 @@ function replaceManagedBlock(existing: string, next: string): string {
     next.slice(nextStart, nextEnd + end.length),
     existing.slice(existingEnd + end.length)
   ].join("");
+}
+
+function hasNoUserContentOutsideManagedBlock(content: string): boolean {
+  const start = "<!-- podcast-note:start -->";
+  const end = "<!-- podcast-note:end -->";
+  const existingStart = content.indexOf(start);
+  const existingEnd = content.indexOf(end, existingStart);
+  if (existingStart === -1 || existingEnd === -1) return false;
+  const outside = `${content.slice(0, existingStart)}\n${content.slice(existingEnd + end.length)}`;
+  return stripGeneratedScaffold(outside).trim() === "";
+}
+
+function stripGeneratedScaffold(content: string): string {
+  let stripped = content.trim();
+  if (stripped.startsWith("---")) {
+    const end = stripped.indexOf("\n---", 3);
+    if (end !== -1) stripped = stripped.slice(end + "\n---".length).trim();
+  }
+  stripped = stripped.replace(/^# .*(?:\n|$)/, "").trim();
+  return stripped;
 }
 
 function defaultAgentsMd(): string {

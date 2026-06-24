@@ -1,10 +1,9 @@
-import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import type { EpisodeProcessingResult, Insight, Watch } from "../../core/src/types.ts";
 import { stableId } from "../../core/src/format.ts";
 import type { WikiProposalProvider, WikiUpdateProposal, WikiVaultConfig } from "./types.ts";
 import { appendUniqueLine, formatTimestamp, frontmatter, isoDate, slugifyPathPart, wikiLink } from "./format.ts";
-import { updateManagedFile, writeManagedMarkdown } from "./vault.ts";
+import { safeVaultPath, updateManagedFile, writeManagedMarkdown } from "./vault.ts";
 
 export function buildWikiUpdateProposals(input: {
   result: EpisodeProcessingResult;
@@ -130,7 +129,11 @@ export async function applySafeProposals(input: {
   const applied: string[] = [];
   const results: Array<{ path: string; contentHash: string }> = [];
   for (const proposal of input.proposals) {
-    const target = join(input.vaultRoot, proposal.targetPath);
+    if (!isAllowedSynthesisPath(proposal.targetPath)) {
+      proposal.status = "failed";
+      continue;
+    }
+    const target = safeVaultPath(input.vaultRoot, proposal.targetPath);
     const content = await readOptional(target);
     const next = content
       ? appendUniqueLine(content, proposal.patch.section, proposal.patch.markdown)
@@ -169,7 +172,19 @@ export async function applyWikiUpdateProposals(input: {
   const results: Array<{ path: string; contentHash?: string; proposal: WikiUpdateProposal }> = [];
   for (const proposal of input.proposals) {
     if (proposal.status !== "approved" && proposal.status !== "pending") continue;
-    const target = join(input.vaultRoot, proposal.targetPath);
+    if (!isAllowedSynthesisPath(proposal.targetPath)) {
+      proposal.status = "failed";
+      results.push({ path: proposal.targetPath, proposal });
+      continue;
+    }
+    let target: string;
+    try {
+      target = safeVaultPath(input.vaultRoot, proposal.targetPath);
+    } catch {
+      proposal.status = "failed";
+      results.push({ path: proposal.targetPath, proposal });
+      continue;
+    }
     const content = await readOptional(target);
     const next = content
       ? appendUniqueLine(content, proposal.patch.section, proposal.patch.markdown)
@@ -302,6 +317,15 @@ function entityPath(entity: { name: string; type: string }): string {
         ? "Products"
         : "Podcasts";
   return `30 Entities/${folder}/${slugifyPathPart(entity.name)}.md`;
+}
+
+function isAllowedSynthesisPath(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  return /^(20 Concepts|30 Entities|40 Claims)\/.+\.md$/i.test(normalized)
+    && !normalized.startsWith("/")
+    && !normalized.includes("../")
+    && !normalized.includes("/..")
+    && !normalized.includes("\0");
 }
 
 function evidenceLine(result: EpisodeProcessingResult, insight: Insight): string {

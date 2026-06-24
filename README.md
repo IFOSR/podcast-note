@@ -157,6 +157,57 @@ DEEPSEEK_TUI_COMMAND="deepseek tui"
 
 `DEEPSEEK_TUI_COMMAND=deepseek-tui` also works if your local executable is named that way. The provider calls `<command> exec --auto <prompt>`, does not prompt the user for confirmations, and still writes wiki synthesis updates as pending proposals unless auto-apply is enabled.
 
+## Obsidian Wiki Export
+
+Podcast Note can compile processed podcast knowledge into an Obsidian-compatible Markdown vault. The wiki layer has two parts:
+
+- Source notes under `10 Sources/Podcasts/`, generated deterministically from processed episodes with frontmatter, summaries, entities, insights, transcript excerpts, source URLs, timestamps, and insight ids.
+- Synthesis proposals under `00 Inbox/`, generated from high-confidence grounded insights for `20 Concepts/`, `30 Entities/`, and `40 Claims/` pages.
+
+Set the target vault with:
+
+```bash
+PODCAST_NOTE_OBSIDIAN_VAULT=/path/to/PodcastNoteVault
+```
+
+Then export already processed episodes:
+
+```bash
+bun apps/worker/src/cli.ts export obsidian --vault /path/to/PodcastNoteVault --db storage/podcast-note.sqlite --workspace-id <workspace_id>
+```
+
+During real processing, wiki export can also run inline:
+
+```bash
+bun apps/worker/src/cli.ts process-sources --obsidian-vault /path/to/PodcastNoteVault
+```
+
+By default, source notes are written automatically and synthesis updates stay as pending proposals. Approve and apply proposals explicitly:
+
+```bash
+bun apps/worker/src/cli.ts query wiki-proposals --status pending --format json
+bun apps/worker/src/cli.ts wiki:proposal-status <proposal_id> approved
+bun apps/worker/src/cli.ts wiki:apply-proposals --vault /path/to/PodcastNoteVault --status approved
+```
+
+For local automation, safe proposals can be auto-applied:
+
+```bash
+bun apps/worker/src/cli.ts export obsidian --vault /path/to/PodcastNoteVault --auto-apply
+```
+
+The writer protects the vault in two ways:
+
+- Proposal targets are limited to `20 Concepts/`, `30 Entities/`, and `40 Claims/`; unsafe paths such as `../outside.md` are marked failed instead of written.
+- Re-exporting the same deterministic source note updates the managed content, but if a user has added notes outside the `podcast-note` managed block, the worker writes a `.conflict-<timestamp>.md` file instead of overwriting user text.
+
+Generate a wiki brief and publish Markdown through the Lark/file publisher adapter:
+
+```bash
+bun apps/worker/src/cli.ts wiki:brief --vault /path/to/PodcastNoteVault --topic "AI Agent 商业化" --period weekly
+bun apps/worker/src/cli.ts lark:publish-markdown /path/to/brief.md --target file:///tmp/brief.md
+```
+
 ## Real CLI Flow
 
 Create local inputs from the examples:
