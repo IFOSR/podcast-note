@@ -22,7 +22,7 @@ import {
   type SummaryResponse
 } from "./llm-json.ts";
 
-type CommandLineProviderOptions = {
+export type CommandLineProviderOptions = {
   deepseekCommand?: string;
   kimiCommand?: string;
   model?: string;
@@ -30,6 +30,15 @@ type CommandLineProviderOptions = {
   kimiModel?: string;
   cwd?: string;
   timeoutMs?: number;
+};
+
+export type CommandLineJsonProvider = {
+  name: string;
+  model: string;
+  completeJson<T>(input: {
+    schema: Record<string, unknown>;
+    prompt: string;
+  }): Promise<T>;
 };
 
 type CommandSpec = {
@@ -118,17 +127,32 @@ export function createCommandLineIntentAssistantProvider(options: CommandLinePro
   };
 }
 
-function providerConfig(options: CommandLineProviderOptions, purpose: "insight" | "intent") {
+export function createCommandLineJsonProvider(options: CommandLineProviderOptions = {}, purpose: "insight" | "intent" | "wiki" = "wiki"): CommandLineJsonProvider {
+  const config = providerConfig(options, purpose);
+  return {
+    name: "command-line-json",
+    model: config.modelLabel,
+    async completeJson<T>(input): Promise<T> {
+      return await runLocalLlmJson<T>({
+        ...config,
+        schema: input.schema,
+        prompt: input.prompt
+      });
+    }
+  };
+}
+
+function providerConfig(options: CommandLineProviderOptions, purpose: "insight" | "intent" | "wiki") {
   const timeoutMs = options.timeoutMs
-    ?? numberFromEnv(purpose === "intent" ? "LOCAL_LLM_INTENT_TIMEOUT_MS" : "LOCAL_LLM_INSIGHT_TIMEOUT_MS", purpose === "intent" ? 2 * 60 * 1000 : 30 * 60 * 1000);
+    ?? numberFromEnv(timeoutEnvName(purpose), purpose === "insight" ? 30 * 60 * 1000 : 2 * 60 * 1000);
   const deepseekModel = options.deepseekModel
     ?? options.model
-    ?? process.env[purpose === "intent" ? "DEEPSEEK_INTENT_MODEL" : "DEEPSEEK_INSIGHT_MODEL"]
+    ?? process.env[modelEnvName("DEEPSEEK", purpose)]
     ?? process.env["DEEPSEEK_MODEL"]
     ?? "deepseek-chat";
   const kimiModel = options.kimiModel
     ?? options.model
-    ?? process.env[purpose === "intent" ? "KIMI_INTENT_MODEL" : "KIMI_INSIGHT_MODEL"]
+    ?? process.env[modelEnvName("KIMI", purpose)]
     ?? process.env["KIMI_MODEL"]
     ?? "kimi-k2-0711-preview";
   return {
@@ -147,6 +171,18 @@ function providerConfig(options: CommandLineProviderOptions, purpose: "insight" 
       })
     ]
   };
+}
+
+function timeoutEnvName(purpose: "insight" | "intent" | "wiki"): string {
+  if (purpose === "intent") return "LOCAL_LLM_INTENT_TIMEOUT_MS";
+  if (purpose === "wiki") return "LOCAL_LLM_WIKI_TIMEOUT_MS";
+  return "LOCAL_LLM_INSIGHT_TIMEOUT_MS";
+}
+
+function modelEnvName(provider: "DEEPSEEK" | "KIMI", purpose: "insight" | "intent" | "wiki"): string {
+  if (purpose === "intent") return `${provider}_INTENT_MODEL`;
+  if (purpose === "wiki") return `${provider}_WIKI_MODEL`;
+  return `${provider}_INSIGHT_MODEL`;
 }
 
 async function runLocalLlmJson<T>(input: {

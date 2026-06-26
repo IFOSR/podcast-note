@@ -2,7 +2,7 @@ import type { Episode, EpisodeSummary, Source, TranscriptSegment, Watch } from "
 import QRCode from "qrcode";
 import { readFileSync } from "node:fs";
 import { stableId } from "../../../../packages/core/src/format.ts";
-import { createCommandLineInsightProvider, createCommandLineIntentAssistantProvider, createVolcengineTranscriptProvider } from "../../../../packages/ai/src/index.ts";
+import { createCommandLineInsightProvider, createCommandLineIntentAssistantProvider, createCommandLineJsonProvider, createVolcengineTranscriptProvider } from "../../../../packages/ai/src/index.ts";
 import type { IntentAssistantOutput } from "../../../../packages/ai/src/index.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../../packages/db/src/index.ts";
 import {
@@ -18,7 +18,7 @@ import {
 import { processSourceInputs } from "../../../worker/src/process-sources.ts";
 import { runM1Once } from "../../../worker/src/m1-run-once.ts";
 import { deliverPendingLarkEpisodeResultsToAllInstallations, deliverPendingWikiProposalSummaryToAllLarkInstallations } from "../../../worker/src/lark-delivery.ts";
-import { askWiki } from "../../../worker/src/wiki-ask.ts";
+import { askWiki, askWikiWithLlm, type WikiAskResult } from "../../../worker/src/wiki-ask.ts";
 import { buildWikiFeed } from "../../../worker/src/wiki-feed.ts";
 import { recordAppliedWikiProposalRegistry } from "../../../worker/src/wiki-registry.ts";
 import {
@@ -44,6 +44,7 @@ const host = options["host"] ?? process.env["HOST"] ?? "127.0.0.1";
 const dbPath = options["db"] ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
 const wikiVaultPath = firstNonEmpty(options["wiki-vault"], process.env["PODCAST_NOTE_OBSIDIAN_VAULT"], "storage/wiki-vault");
 const token = options["token"] ?? process.env["PODCAST_NOTE_SESSION_TOKEN"] ?? "local-dev-token";
+const wikiLlmEnabled = booleanOption(options["wiki-llm"], process.env["PODCAST_NOTE_WIKI_LLM"], true);
 const schedulerEnabled = booleanOption(options["scheduler"], process.env["PODCAST_NOTE_SCHEDULER_ENABLED"], true);
 const schedulerIntervalMs = numberOption(options["scheduler-interval-ms"], process.env["PODCAST_NOTE_SCHEDULER_INTERVAL_MS"], 5 * 60 * 1000);
 const schedulerPollingLimit = numberOption(options["scheduler-polling-limit"], process.env["PODCAST_NOTE_SCHEDULER_POLLING_LIMIT"], 20);
@@ -97,13 +98,7 @@ const server = Bun.serve({
       }
       if (url.pathname === "/api/wiki/ask") {
         const question = url.searchParams.get("question") ?? "";
-        return json(askWiki({
-          repositories: repos,
-          workspaceId: context.workspace.id,
-          vaultRoot: wikiVaultRoot(),
-          question,
-          limit: 5
-        }));
+        return json(await askWikiForWeb(context, question));
       }
       if (url.pathname === "/api/integrations/feishu") {
         return json({ ok: true, integration: larkBotStatus() });
@@ -372,7 +367,7 @@ const server = Bun.serve({
       }
       if (url.pathname === "/wiki") {
         const notice = noticeForRequest(request, url);
-        return html(renderWikiPage(context, url, notice.message), 200, notice.headers);
+        return html(await renderWikiPage(context, url, notice.message), 200, notice.headers);
       }
       if (url.pathname === "/integrations/feishu") {
         const notice = noticeForRequest(request, url);
@@ -1735,7 +1730,7 @@ async function renderFeishuIntegrationPage(context: SessionContext, request: Req
 </html>`;
 }
 
-function renderWikiPage(context: SessionContext, url: URL, notice: string | null | undefined): string {
+async function renderWikiPage(context: SessionContext, url: URL, notice: string | null | undefined): Promise<string> {
   const vaultRoot = wikiVaultRoot();
   const feed = buildWikiFeed({
     repositories: repos,
@@ -1752,13 +1747,7 @@ function renderWikiPage(context: SessionContext, url: URL, notice: string | null
   const stalePages = pages.filter((page) => page.status === "stale" || page.status === "deprecated" || page.status === "contested");
   const question = url.searchParams.get("question")?.trim() ?? "";
   const askResult = question
-    ? askWiki({
-      repositories: repos,
-      workspaceId: context.workspace.id,
-      vaultRoot,
-      question,
-      limit: 5
-    })
+    ? await askWikiForWeb(context, question)
     : undefined;
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1863,6 +1852,39 @@ function renderWikiPage(context: SessionContext, url: URL, notice: string | null
 
 function renderMainNav(active: "process" | "monitor" | "wiki" | "feishu"): string {
   return `<nav class="nav" aria-label="页面导航"><a class="${active === "process" ? "active" : ""}" href="/">即时处理</a><a class="${active === "monitor" ? "active" : ""}" href="/monitor">监控任务</a><a class="${active === "wiki" ? "active" : ""}" href="/wiki">知识库</a><a class="${active === "feishu" ? "active" : ""}" href="/integrations/feishu">飞书集成</a></nav>`;
+}
+
+async function askWikiForWeb(context: SessionContext, question: string): Promise<WikiAskResult> {
+  if (!wikiLlmEnabled) {
+    return askWiki({
+      repositories: repos,
+      workspaceId: context.workspace.id,
+      vaultRoot: wikiVaultRoot(),
+      question,
+      limit: 5
+    });
+  }
+  try {
+    return await askWikiWithLlm({
+      repositories: repos,
+      workspaceId: context.workspace.id,
+      vaultRoot: wikiVaultRoot(),
+      question,
+      llm: createCommandLineJsonProvider({}, "wiki"),
+      candidateLimit: 20,
+      citationLimit: 5
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      ok: true,
+      question,
+      answer: `本地 LLM 暂时不可用，无法完成知识库 RAG 判断：${reason}`,
+      insufficient: true,
+      hasConflict: false,
+      citations: []
+    };
+  }
 }
 
 function wikiVaultRoot(): string {

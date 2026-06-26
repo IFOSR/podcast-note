@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
+import { askWikiWithLlm, type WikiAskLlmProvider } from "./wiki-ask.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "podcast-note-wiki-ask-"));
 const dbPath = join(dir, "check.sqlite");
@@ -153,6 +154,51 @@ try {
     status: "pending"
   });
 
+  const fakeLlm: WikiAskLlmProvider = {
+    name: "fake-wiki-rag",
+    model: "fake",
+    async completeJson<T>({ prompt }): Promise<T> {
+      if (prompt.includes("AI native")) {
+        return {
+          insufficient: true,
+          answer: "知识库证据不足：当前 evidence 没有直接说明 AI native 组织特点。",
+          citationIds: [],
+          reasoning: "Only adjacent organization evidence exists."
+        } as T;
+      }
+      const candidates = JSON.parse(jsonArrayFromPrompt(prompt)) as Array<{ id: string; claim: string }>;
+      const selected = candidates.find((candidate) => candidate.claim.includes("AI Agent 商业化转向企业工作流集成"));
+      return {
+        insufficient: false,
+        answer: "AI Agent 商业化正在转向企业工作流集成，需要重视集成与权限。",
+        citationIds: selected ? [selected.id] : [],
+        reasoning: "Selected directly relevant evidence."
+      } as T;
+    }
+  };
+
+  const ragAnswer = await askWikiWithLlm({
+    repositories: repos,
+    workspaceId: workspace.id,
+    vaultRoot,
+    question: "AI Agent 商业化有什么结论？",
+    llm: fakeLlm
+  });
+  if (ragAnswer.insufficient || !ragAnswer.answer.includes("企业工作流集成") || ragAnswer.citations[0]?.insightId !== "insight_wiki_ask") {
+    throw new Error(`Expected LLM RAG answer with selected citation, got ${JSON.stringify(ragAnswer)}`);
+  }
+
+  const ragInsufficient = await askWikiWithLlm({
+    repositories: repos,
+    workspaceId: workspace.id,
+    vaultRoot,
+    question: "AI native 的组织具有什么样的特点啊？",
+    llm: fakeLlm
+  });
+  if (!ragInsufficient.insufficient || ragInsufficient.citations.length !== 0) {
+    throw new Error(`Expected LLM RAG to reject weakly related evidence, got ${JSON.stringify(ragInsufficient)}`);
+  }
+
   const output = await $`bun apps/worker/src/cli.ts wiki:ask --db ${dbPath} --workspace-id ${workspace.id} --vault ${vaultRoot} --question "AI Agent 商业化有什么结论？"`.text();
   const parsed = JSON.parse(output) as {
     ok: boolean;
@@ -190,8 +236,37 @@ try {
     citationCount: parsed.citations.length,
     hasConflict: parsed.hasConflict,
     insufficientFallback: empty.insufficient,
-    genericAiFallback: broadAi.insufficient
+    genericAiFallback: broadAi.insufficient,
+    ragInsufficient: ragInsufficient.insufficient
   }, null, 2));
 } finally {
   rmSync(dir, { recursive: true, force: true });
+}
+
+function jsonArrayFromPrompt(prompt: string): string {
+  const start = prompt.indexOf("[");
+  if (start < 0) throw new Error(`Prompt did not include candidate JSON: ${prompt}`);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < prompt.length; index += 1) {
+    const char = prompt[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "[") depth += 1;
+    if (char === "]") depth -= 1;
+    if (depth === 0) return prompt.slice(start, index + 1);
+  }
+  throw new Error(`Unbalanced candidate JSON in prompt: ${prompt}`);
 }

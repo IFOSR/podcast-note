@@ -151,7 +151,7 @@ try {
   }
 
   server = Bun.spawn({
-    cmd: ["bun", "apps/web/src/server/preview.ts", "--port", String(port), "--db", dbPath, "--scheduler", "false"],
+    cmd: ["bun", "apps/web/src/server/preview.ts", "--port", String(port), "--db", dbPath, "--scheduler", "false", "--wiki-llm", "false"],
     cwd: process.cwd(),
     env: {
       ...process.env,

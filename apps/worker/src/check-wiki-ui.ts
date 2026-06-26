@@ -13,7 +13,7 @@ const url = `http://127.0.0.1:${port}`;
 let server: ReturnType<typeof Bun.spawn> | undefined;
 try {
   server = Bun.spawn({
-    cmd: ["bun", "apps/web/src/server/preview.ts", "--port", String(port), "--db", dbPath, "--wiki-vault", vaultRoot],
+    cmd: ["bun", "apps/web/src/server/preview.ts", "--port", String(port), "--db", dbPath, "--wiki-vault", vaultRoot, "--wiki-llm", "false"],
     cwd: process.cwd(),
     env: {
       ...process.env,

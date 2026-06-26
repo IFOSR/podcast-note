@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { createCommandLineInsightProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
+import { createCommandLineInsightProvider, createCommandLineJsonProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
 import { connectorFor } from "../../../packages/connectors/src/index.ts";
 import type { Episode } from "../../../packages/core/src/types.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
@@ -25,7 +25,7 @@ import { buildWikiFeed } from "./wiki-feed.ts";
 import { synthesizeWikiProposals } from "./wiki-synthesis.ts";
 import { buildWikiDecayProposals } from "./wiki-decay.ts";
 import { scanWikiConflictProposals } from "./wiki-conflict.ts";
-import { askWiki } from "./wiki-ask.ts";
+import { askWiki, askWikiWithLlm } from "./wiki-ask.ts";
 
 const command = process.argv[2] ?? "help";
 
@@ -286,13 +286,23 @@ if (command === "demo") {
     const question = decodeCliText(flagValue("--question") ?? process.argv[3] ?? "");
     if (!question) fail("Usage: bun apps/worker/src/cli.ts wiki:ask --question <question> [--workspace-id id] [--vault path]");
     const repos = createRepositories(openPodcastNoteDb(dbPath));
-    const result = askWiki({
-      repositories: repos,
-      workspaceId,
-      vaultRoot: flagValue("--vault"),
-      question,
-      limit: numberFlagValue("--limit") ?? 5
-    });
+    const result = hasFlag("--llm")
+      ? await askWikiWithLlm({
+        repositories: repos,
+        workspaceId,
+        vaultRoot: flagValue("--vault"),
+        question,
+        llm: createCommandLineJsonProvider({}, "wiki"),
+        candidateLimit: numberFlagValue("--limit") ?? 20,
+        citationLimit: 5
+      })
+      : askWiki({
+        repositories: repos,
+        workspaceId,
+        vaultRoot: flagValue("--vault"),
+        question,
+        limit: numberFlagValue("--limit") ?? 5
+      });
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
@@ -618,7 +628,7 @@ if (command === "demo") {
       "  wiki:proposal-status <proposal_id> <pending|approved|applied|rejected|failed>",
       "  wiki:apply-proposals --vault <path> [--workspace-id id] [--status approved|pending]",
       "  wiki:feed --vault <path> [--workspace-id id]",
-      "  wiki:ask --question <question> [--workspace-id id] [--vault path]",
+      "  wiki:ask --question <question> [--workspace-id id] [--vault path] [--llm]",
       "  wiki:synthesize --vault <path> [--workspace-id id]",
       "  wiki:decay --vault <path> [--workspace-id id] [--stale-days 90]",
       "  wiki:conflict --vault <path> [--workspace-id id]",
@@ -958,4 +968,8 @@ function extractHealthSummary(content: string): string {
 function decodeCliText(value: string): string {
   if (!value.includes("\\u")) return value;
   return value.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+function hasFlag(name: string): boolean {
+  return process.argv.includes(name);
 }

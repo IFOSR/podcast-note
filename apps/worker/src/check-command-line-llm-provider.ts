@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createCommandLineInsightProvider, createCommandLineIntentAssistantProvider } from "../../../packages/ai/src/index.ts";
+import { createCommandLineInsightProvider, createCommandLineIntentAssistantProvider, createCommandLineJsonProvider } from "../../../packages/ai/src/index.ts";
 import type { Episode, SemanticSegment, Watch } from "../../../packages/core/src/types.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "podcast-note-command-line-llm-"));
@@ -88,6 +88,18 @@ try {
     throw new Error(`Expected Kimi fallback monitor intent, got ${JSON.stringify(intent)}.`);
   }
 
+  const jsonProvider = createCommandLineJsonProvider({
+    deepseekCommand: `${deepseek} --fail`,
+    kimiCommand: kimi,
+    model: "fake-model",
+    timeoutMs: 5000
+  }, "wiki");
+  const wikiJson = await jsonProvider.completeJson<{ answer: string }>({
+    schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] },
+    prompt: "Answer a wiki question. Return JSON."
+  });
+  if (wikiJson.answer !== "Kimi wiki answer") throw new Error(`Expected Kimi wiki fallback JSON, got ${JSON.stringify(wikiJson)}.`);
+
   const calls = readFileSync(logPath, "utf8");
   if (!calls.includes("deepseek:exec --model fake-model")) throw new Error(`DeepSeek exec args not observed: ${calls}`);
   if (!calls.includes("kimi:--quiet -m fake-model -p")) throw new Error(`Kimi non-interactive args not observed: ${calls}`);
@@ -98,6 +110,7 @@ try {
     summary: summary.oneLiner,
     fallbackInsight: insights[0]?.claim,
     fallbackIntent: intent.intent,
+    wikiAnswer: wikiJson.answer,
     calls: calls.trim().split("\n")
   }, null, 2));
 } finally {
@@ -161,6 +174,12 @@ elif [[ "$prompt" == *"Extract only watch-specific insights"* ]]; then
       "confidence": 0.88
     }
   ]
+}
+JSON
+elif [[ "$prompt" == *"Answer a wiki question"* ]]; then
+  cat <<'JSON'
+{
+  "answer": "${name === "deepseek" ? "DeepSeek wiki answer" : "Kimi wiki answer"}"
 }
 JSON
 else
