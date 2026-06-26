@@ -128,26 +128,34 @@ export function recordAppliedWikiProposalRegistry(input: {
       path: input.proposal.targetPath
     });
   }
-  if (!input.proposal.insightId) return;
-  const citation = Array.isArray((input.proposal.patch as { citations?: unknown }).citations)
-    ? ((input.proposal.patch as { citations: Array<Record<string, unknown>> }).citations)
-      .find((item) => item.insightId === input.proposal.insightId)
-    : undefined;
-  input.repositories.upsertWikiPageEvidence({
-    workspaceId: input.workspaceId,
-    pageId: page.id,
-    insightId: input.proposal.insightId,
-    episodeId: input.proposal.episodeId,
-    watchId: insight?.watchId,
-    supportType: supportTypeForProposal(input.proposal.proposalType),
-    claim: insight?.claim ?? input.proposal.title,
-    evidenceExcerpt: insight?.evidenceExcerpt ?? markdownFromPatch(input.proposal.patch),
-    timestampStartSec: numberOrUndefined(citation?.timestampStartSec),
-    timestampEndSec: numberOrUndefined(citation?.timestampEndSec),
-    confidence: insight?.confidence ?? 0,
-    groundednessScore: insight?.groundednessScore ?? 0,
-    observedAt
-  });
+  const citations = citationsFromPatch(input.proposal.patch);
+  const evidenceRefs = citations.length > 0
+    ? citations
+    : input.proposal.insightId
+      ? [{ insightId: input.proposal.insightId, episodeId: input.proposal.episodeId }]
+      : [];
+  for (const citation of evidenceRefs) {
+    const insightId = stringOrUndefined(citation.insightId);
+    if (!insightId) continue;
+    const episodeId = stringOrUndefined(citation.episodeId) ?? input.proposal.episodeId;
+    const citedInsight = input.repositories.listInsights({ episodeId, limit: 100 })
+      .find((item) => item.id === insightId);
+    input.repositories.upsertWikiPageEvidence({
+      workspaceId: input.workspaceId,
+      pageId: page.id,
+      insightId,
+      episodeId,
+      watchId: citedInsight?.watchId,
+      supportType: supportTypeForProposal(input.proposal.proposalType),
+      claim: citedInsight?.claim ?? input.proposal.title,
+      evidenceExcerpt: citedInsight?.evidenceExcerpt ?? markdownFromPatch(input.proposal.patch),
+      timestampStartSec: numberOrUndefined(citation.timestampStartSec),
+      timestampEndSec: numberOrUndefined(citation.timestampEndSec),
+      confidence: citedInsight?.confidence ?? 0,
+      groundednessScore: citedInsight?.groundednessScore ?? 0,
+      observedAt
+    });
+  }
 }
 
 function upsertAppliedPage(input: {
@@ -238,6 +246,16 @@ function supportTypeForProposal(type: string): "supporting" | "contradicting" | 
   if (type === "flag_conflict") return "contradicting";
   if (type === "add_crosslink") return "context";
   return "supporting";
+}
+
+function citationsFromPatch(patch: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(patch.citations)
+    ? patch.citations.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    : [];
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function markdownFromPatch(patch: Record<string, unknown>): string {

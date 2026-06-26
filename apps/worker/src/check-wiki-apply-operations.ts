@@ -38,26 +38,50 @@ try {
   repos.saveProcessingResult({
     episode: { id: "episode_wiki_apply_ops", title: "Apply Ops Evidence", pageUrl: "https://example.invalid/apply-ops", audioUrl: "https://example.invalid/apply-ops.mp3" },
     summary: { oneLiner: "Apply.", overview: "Apply.", chapters: [], worthListening: { recommendation: "listen_segments", reason: "Apply.", bestSegments: [] }, entities: [] },
-    segments: [{ index: 0, startSec: 0, endSec: 60, text: "Apply ops.", textExcerpt: "Apply ops.", title: "Apply", summary: "Apply." }],
-    insights: [{
-      id: "insight_wiki_apply_ops",
-      workspaceId: workspace.id,
-      watchId: watch.id,
-      episodeId: "episode_wiki_apply_ops",
-      segmentIndex: 0,
-      claim: "AI Agent 商业化转向企业工作流",
-      evidenceExcerpt: "AI Agent 商业化转向企业工作流。",
-      timestampStartSec: 0,
-      timestampEndSec: 60,
-      entities: [],
-      relevanceScore: 0.9,
-      confidence: 0.88,
-      groundednessScore: 0.86,
-      outputLanguage: "zh-CN",
-      status: "published",
-      promptVersion: "watch-insight-v1",
-      model: "check"
-    }]
+    segments: [
+      { index: 0, startSec: 0, endSec: 60, text: "Apply ops.", textExcerpt: "Apply ops.", title: "Apply", summary: "Apply." },
+      { index: 1, startSec: 61, endSec: 120, text: "AI native 组织围绕真实工作流组建跨职能小队。", textExcerpt: "AI native 组织围绕真实工作流组建跨职能小队。", title: "Org", summary: "Org." }
+    ],
+    insights: [
+      {
+        id: "insight_wiki_apply_ops",
+        workspaceId: workspace.id,
+        watchId: watch.id,
+        episodeId: "episode_wiki_apply_ops",
+        segmentIndex: 0,
+        claim: "AI Agent 商业化转向企业工作流",
+        evidenceExcerpt: "AI Agent 商业化转向企业工作流。",
+        timestampStartSec: 0,
+        timestampEndSec: 60,
+        entities: [],
+        relevanceScore: 0.9,
+        confidence: 0.88,
+        groundednessScore: 0.86,
+        outputLanguage: "zh-CN",
+        status: "published",
+        promptVersion: "watch-insight-v1",
+        model: "check"
+      },
+      {
+        id: "insight_wiki_apply_ops_org",
+        workspaceId: workspace.id,
+        watchId: watch.id,
+        episodeId: "episode_wiki_apply_ops",
+        segmentIndex: 1,
+        claim: "AI native 组织围绕真实工作流组建跨职能小队",
+        evidenceExcerpt: "AI native 组织围绕真实工作流组建跨职能小队，并让产品、设计、工程共同对结果负责。",
+        timestampStartSec: 61,
+        timestampEndSec: 120,
+        entities: [],
+        relevanceScore: 0.9,
+        confidence: 0.9,
+        groundednessScore: 0.88,
+        outputLanguage: "zh-CN",
+        status: "published",
+        promptVersion: "watch-insight-v1",
+        model: "check"
+      }
+    ]
   }, watch, "check");
 
   mkdirSync(join(vaultRoot, "20 Concepts"), { recursive: true });
@@ -136,8 +160,16 @@ try {
     patch: {
       section: "当前综合判断",
       operation: "replace_managed_section",
-      markdown: "新综合判断。\n\n- AI Agent 商业化转向企业工作流 (insight_id: insight_wiki_apply_ops)",
-      citations: [{ episodeId: "episode_wiki_apply_ops", insightId: "insight_wiki_apply_ops" }]
+      markdown: [
+        "新综合判断。",
+        "",
+        "- AI Agent 商业化转向企业工作流 (insight_id: insight_wiki_apply_ops)",
+        "- AI native 组织围绕真实工作流组建跨职能小队 (insight_id: insight_wiki_apply_ops_org)"
+      ].join("\n"),
+      citations: [
+        { episodeId: "episode_wiki_apply_ops", insightId: "insight_wiki_apply_ops", timestampStartSec: 0, timestampEndSec: 60 },
+        { episodeId: "episode_wiki_apply_ops", insightId: "insight_wiki_apply_ops_org", timestampStartSec: 61, timestampEndSec: 120 }
+      ]
     },
     status: "approved"
   });
@@ -173,6 +205,18 @@ try {
   const updated = repos.getWikiPageByPath({ workspaceId: workspace.id, vaultRoot, path: "40 Claims/旧结论.md" });
   if (!updated || updated.status !== "stale" || updated.freshnessScore !== 0.4) {
     throw new Error(`Expected stale registry state, got ${JSON.stringify(updated)}`);
+  }
+  const conceptPage = repos.getWikiPageByPath({ workspaceId: workspace.id, vaultRoot, path: "20 Concepts/AI Agent 商业化.md" });
+  const conceptEvidence = conceptPage ? repos.listWikiPageEvidence({ pageId: conceptPage.id, limit: 10 }) : [];
+  if (!conceptEvidence.some((item) => item.insightId === "insight_wiki_apply_ops_org")) {
+    throw new Error(`Expected every proposal citation to be queryable evidence, got ${JSON.stringify(conceptEvidence)}`);
+  }
+  const ask = JSON.parse(await $`bun apps/worker/src/cli.ts wiki:ask --db ${dbPath} --workspace-id ${workspace.id} --vault ${vaultRoot} --question "AI native 的组织具有什么样的特点啊？"`.text()) as {
+    insufficient: boolean;
+    citations: Array<{ insightId: string; timestamp?: string }>;
+  };
+  if (ask.insufficient || !ask.citations.some((citation) => citation.insightId === "insight_wiki_apply_ops_org" && citation.timestamp === "1:01-2:00")) {
+    throw new Error(`Expected Ask Wiki to use the matching synthesis citation, got ${JSON.stringify(ask)}`);
   }
   if (!existsSync(join(vaultRoot, "health.md"))) throw new Error("Apply proposals should refresh health.md.");
 

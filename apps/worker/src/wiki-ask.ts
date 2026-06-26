@@ -35,6 +35,8 @@ type Candidate = {
   score: number;
 };
 
+const genericQueryTerms = new Set(["ai", "llm", "ml", "人工智能"]);
+
 export function askWiki(input: {
   repositories: Repositories;
   workspaceId: string;
@@ -78,11 +80,13 @@ export function askWiki(input: {
     .sort((a, b) => b.score - a.score)
     .slice(0, input.limit ?? 5);
 
-  const conflictProposals = input.repositories.listWikiUpdateProposals({
-    workspaceId: input.workspaceId,
-    status: "pending",
-    limit: 100
-  }).filter((proposal) => proposal.proposalType === "flag_conflict");
+  const conflictProposals = ["pending", "approved", "applied"]
+    .flatMap((status) => input.repositories.listWikiUpdateProposals({
+      workspaceId: input.workspaceId,
+      status: status as "pending" | "approved" | "applied",
+      limit: 100
+    }))
+    .filter((proposal) => proposal.proposalType === "flag_conflict");
   const hasConflict = candidates.some((candidate) => pageHasConflict(candidate.page, conflictProposals))
     || conflictProposals.some((proposal) => proposalMatchesTerms(proposal, terms));
   if (candidates.length === 0) return insufficientResult(question, hasConflict);
@@ -152,16 +156,33 @@ function scoreCandidate(input: {
     input.episode?.title
   ].filter(Boolean).join("\n"));
   let score = 0;
+  let specificScore = 0;
+  let specificHitCount = 0;
+  const requiredSpecificHits = Math.min(2, specificTermsFor(terms).length);
   for (const term of terms) {
-    if (haystack.includes(term)) score += term.length >= 4 ? 2 : 1;
+    if (!haystack.includes(term)) continue;
+    const weight = term.length >= 4 ? 2 : 1;
+    score += weight;
+    if (!isGenericQueryTerm(term)) {
+      specificScore += weight;
+      specificHitCount += 1;
+    }
   }
-  if (score === 0) return 0;
+  if (specificScore === 0 || specificHitCount < requiredSpecificHits) return 0;
   if (input.evidence.supportType === "supporting") score += 2;
   if (input.page.status === "active") score += 2;
   if (input.page.status === "contested") score += 1;
   score += Math.min(1, input.evidence.confidence);
   score += Math.min(1, input.evidence.groundednessScore);
   return score;
+}
+
+function isGenericQueryTerm(term: string): boolean {
+  return genericQueryTerms.has(term);
+}
+
+function specificTermsFor(terms: string[]): string[] {
+  return terms.filter((term) => !isGenericQueryTerm(term));
 }
 
 function pageHasConflict(page: WikiPageRecord, proposals: WikiUpdateProposalRecord[]): boolean {
@@ -213,7 +234,7 @@ function normalizeForSearch(input: string): string {
 
 function stripChineseStopwords(input: string): string {
   return input
-    .replace(/(帮我|请问|请|一下|知识库|播客|里面|关于|对于|有没有|是否|什么|哪些|怎么|为什么|如何|多少|观点|结论|总结|情况|内容|讲了|提到|相关|直接|最新)/gu, "")
+    .replace(/(帮我|请问|请|一下|知识库|播客|里面|关于|对于|有没有|是否|什么样|有什么样|什么|哪些|怎么|为什么|如何|多少|观点|结论|总结|情况|内容|讲了|提到|相关|直接|最新|特点|特征|具备|具有|的|了|啊|吗|呢)/gu, "")
     .trim();
 }
 

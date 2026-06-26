@@ -42,28 +42,54 @@ try {
       audioUrl: "https://example.invalid/wiki-ask.mp3"
     },
     summary: { oneLiner: "Agent.", overview: "Agent.", chapters: [], worthListening: { recommendation: "listen_segments", reason: "Agent.", bestSegments: [] }, entities: [] },
-    segments: [{ index: 0, startSec: 120, endSec: 180, text: "AI Agent 商业化转向企业工作流集成。", textExcerpt: "AI Agent 商业化转向企业工作流集成。", title: "Agent", summary: "Agent." }],
-    insights: [{
-      id: "insight_wiki_ask",
-      workspaceId: workspace.id,
-      watchId: watch.id,
-      episodeId: "episode_wiki_ask",
-      segmentIndex: 0,
-      claim: "AI Agent 商业化转向企业工作流集成",
-      evidenceExcerpt: "嘉宾认为 AI Agent 商业化转向企业工作流集成。",
-      reasoning: "多家公司从通用助手转向企业流程。",
-      implication: "产品需要更重视集成和权限。",
-      timestampStartSec: 120,
-      timestampEndSec: 180,
-      entities: [],
-      relevanceScore: 0.9,
-      confidence: 0.9,
-      groundednessScore: 0.88,
-      outputLanguage: "zh-CN",
-      status: "published",
-      promptVersion: "watch-insight-v1",
-      model: "check"
-    }]
+    segments: [
+      { index: 0, startSec: 120, endSec: 180, text: "AI Agent 商业化转向企业工作流集成。", textExcerpt: "AI Agent 商业化转向企业工作流集成。", title: "Agent", summary: "Agent." },
+      { index: 1, startSec: 181, endSec: 240, text: "AI 团队组织更强调跨职能协作。", textExcerpt: "AI 团队组织更强调跨职能协作。", title: "Org", summary: "Org." }
+    ],
+    insights: [
+      {
+        id: "insight_wiki_ask",
+        workspaceId: workspace.id,
+        watchId: watch.id,
+        episodeId: "episode_wiki_ask",
+        segmentIndex: 0,
+        claim: "AI Agent 商业化转向企业工作流集成",
+        evidenceExcerpt: "嘉宾认为 AI Agent 商业化转向企业工作流集成。",
+        reasoning: "多家公司从通用助手转向企业流程。",
+        implication: "产品需要更重视集成和权限。",
+        timestampStartSec: 120,
+        timestampEndSec: 180,
+        entities: [],
+        relevanceScore: 0.9,
+        confidence: 0.9,
+        groundednessScore: 0.88,
+        outputLanguage: "zh-CN",
+        status: "published",
+        promptVersion: "watch-insight-v1",
+        model: "check"
+      },
+      {
+        id: "insight_wiki_ask_org_only",
+        workspaceId: workspace.id,
+        watchId: watch.id,
+        episodeId: "episode_wiki_ask",
+        segmentIndex: 1,
+        claim: "AI 团队组织更强调跨职能协作",
+        evidenceExcerpt: "嘉宾只谈到 AI 团队组织更强调跨职能协作，没有讨论这类组织范式。",
+        reasoning: "这是组织协作证据，但不是新型组织定义。",
+        implication: "不能用来直接回答新型组织特点。",
+        timestampStartSec: 181,
+        timestampEndSec: 240,
+        entities: [],
+        relevanceScore: 0.8,
+        confidence: 0.85,
+        groundednessScore: 0.84,
+        outputLanguage: "zh-CN",
+        status: "published",
+        promptVersion: "watch-insight-v1",
+        model: "check"
+      }
+    ]
   }, watch, "check");
 
   const page = repos.upsertWikiPage({
@@ -92,6 +118,21 @@ try {
     timestampEndSec: 180,
     confidence: 0.9,
     groundednessScore: 0.88,
+    observedAt: "2026-06-26T00:00:00.000Z"
+  });
+  repos.upsertWikiPageEvidence({
+    workspaceId: workspace.id,
+    pageId: page.id,
+    insightId: "insight_wiki_ask_org_only",
+    episodeId: "episode_wiki_ask",
+    watchId: watch.id,
+    supportType: "supporting",
+    claim: "AI 团队组织更强调跨职能协作",
+    evidenceExcerpt: "嘉宾只谈到 AI 团队组织更强调跨职能协作，没有讨论这类组织范式。",
+    timestampStartSec: 181,
+    timestampEndSec: 240,
+    confidence: 0.85,
+    groundednessScore: 0.84,
     observedAt: "2026-06-26T00:00:00.000Z"
   });
   repos.upsertWikiUpdateProposal({
@@ -138,11 +179,18 @@ try {
     throw new Error(`Expected explicit insufficient answer, got ${emptyOutput}`);
   }
 
+  const broadAiOutput = await $`bun apps/worker/src/cli.ts wiki:ask --db ${dbPath} --workspace-id ${workspace.id} --vault ${vaultRoot} --question "AI native 的组织具有什么样的特点啊？"`.text();
+  const broadAi = JSON.parse(broadAiOutput) as { insufficient: boolean; answer: string; citations: unknown[] };
+  if (!broadAi.insufficient || broadAi.citations.length !== 0 || !broadAi.answer.includes("知识库证据不足")) {
+    throw new Error(`Ask Wiki must not answer from generic AI-only overlap, got ${broadAiOutput}`);
+  }
+
   console.log(JSON.stringify({
     ok: true,
     citationCount: parsed.citations.length,
     hasConflict: parsed.hasConflict,
-    insufficientFallback: empty.insufficient
+    insufficientFallback: empty.insufficient,
+    genericAiFallback: broadAi.insufficient
   }, null, 2));
 } finally {
   rmSync(dir, { recursive: true, force: true });
