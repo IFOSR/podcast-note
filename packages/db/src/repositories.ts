@@ -29,8 +29,20 @@ export type LarkDeliveryType = "episode_summary" | "wiki_pending_proposal_summar
 export type LarkPendingIntentStatus = "pending" | "completed" | "cancelled" | "expired";
 export type WikiExportType = "source_note" | "brief" | "proposal" | "wiki_page" | "lark_doc";
 export type WikiExportStatus = "written" | "skipped" | "failed";
-export type WikiProposalType = "create_page" | "append_evidence" | "revise_summary" | "flag_conflict" | "add_crosslink";
+export type WikiProposalType =
+  | "create_page"
+  | "append_evidence"
+  | "revise_summary"
+  | "refresh_synthesis"
+  | "flag_conflict"
+  | "add_crosslink"
+  | "mark_stale"
+  | "mark_deprecated"
+  | "archive_page";
 export type WikiProposalStatus = "pending" | "approved" | "applied" | "rejected" | "failed";
+export type WikiPageType = "concept" | "entity" | "claim" | "source" | "brief";
+export type WikiPageStatus = "active" | "stale" | "contested" | "deprecated" | "archived";
+export type WikiEvidenceSupportType = "supporting" | "contradicting" | "context";
 
 export type Session = {
   id: string;
@@ -162,6 +174,44 @@ export type WikiUpdateProposalRecord = {
   status: WikiProposalStatus;
   createdAt: string;
   updatedAt: string;
+};
+
+export type WikiPageRecord = {
+  id: string;
+  workspaceId: string;
+  vaultRoot: string;
+  path: string;
+  pageType: WikiPageType;
+  title: string;
+  status: WikiPageStatus;
+  sourceCount: number;
+  confidenceScore: number;
+  freshnessScore: number;
+  contradictionCount: number;
+  lastSupportedAt?: string;
+  lastContradictedAt?: string;
+  lastReviewedAt?: string;
+  contentHash?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WikiPageEvidenceRecord = {
+  id: string;
+  workspaceId: string;
+  pageId: string;
+  insightId: string;
+  episodeId: string;
+  watchId?: string;
+  supportType: WikiEvidenceSupportType;
+  claim: string;
+  evidenceExcerpt: string;
+  timestampStartSec?: number;
+  timestampEndSec?: number;
+  confidence: number;
+  groundednessScore: number;
+  observedAt: string;
+  createdAt: string;
 };
 
 export type WatchPoll = {
@@ -515,7 +565,44 @@ export function createRepositories(db: PodcastNoteDb) {
     }) => upsertWikiUpdateProposal(db, input),
     listWikiUpdateProposals: (options: { workspaceId?: string; episodeId?: string; status?: WikiProposalStatus; limit?: number } = {}) =>
       listWikiUpdateProposals(db, options),
-    updateWikiUpdateProposalStatus: (id: string, status: WikiProposalStatus) => updateWikiUpdateProposalStatus(db, id, status)
+    updateWikiUpdateProposalStatus: (id: string, status: WikiProposalStatus) => updateWikiUpdateProposalStatus(db, id, status),
+    upsertWikiPage: (input: {
+      workspaceId: string;
+      vaultRoot: string;
+      path: string;
+      pageType: WikiPageType;
+      title: string;
+      status: WikiPageStatus;
+      sourceCount?: number;
+      confidenceScore?: number;
+      freshnessScore?: number;
+      contradictionCount?: number;
+      lastSupportedAt?: string;
+      lastContradictedAt?: string;
+      lastReviewedAt?: string;
+      contentHash?: string;
+    }) => upsertWikiPage(db, input),
+    getWikiPageByPath: (input: { workspaceId: string; vaultRoot: string; path: string }) => getWikiPageByPath(db, input),
+    deleteWikiPageByPath: (input: { workspaceId: string; vaultRoot: string; path: string }) => deleteWikiPageByPath(db, input),
+    listWikiPages: (options: { workspaceId?: string; vaultRoot?: string; status?: WikiPageStatus; pageType?: WikiPageType; limit?: number } = {}) =>
+      listWikiPages(db, options),
+    upsertWikiPageEvidence: (input: {
+      workspaceId: string;
+      pageId: string;
+      insightId: string;
+      episodeId: string;
+      watchId?: string;
+      supportType: WikiEvidenceSupportType;
+      claim: string;
+      evidenceExcerpt: string;
+      timestampStartSec?: number;
+      timestampEndSec?: number;
+      confidence?: number;
+      groundednessScore?: number;
+      observedAt: string;
+    }) => upsertWikiPageEvidence(db, input),
+    listWikiPageEvidence: (options: { workspaceId?: string; pageId?: string; insightId?: string; supportType?: WikiEvidenceSupportType; limit?: number } = {}) =>
+      listWikiPageEvidence(db, options)
   };
 }
 
@@ -667,6 +754,200 @@ function updateWikiUpdateProposalStatus(db: PodcastNoteDb, id: string, status: W
   `).run(status, id);
   const row = db.query("select * from wiki_update_proposals where id = ?").get(id) as Record<string, unknown> | null;
   return row ? wikiUpdateProposalFromRow(row) : undefined;
+}
+
+function upsertWikiPage(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  vaultRoot: string;
+  path: string;
+  pageType: WikiPageType;
+  title: string;
+  status: WikiPageStatus;
+  sourceCount?: number;
+  confidenceScore?: number;
+  freshnessScore?: number;
+  contradictionCount?: number;
+  lastSupportedAt?: string;
+  lastContradictedAt?: string;
+  lastReviewedAt?: string;
+  contentHash?: string;
+}): WikiPageRecord {
+  const id = stableId("wiki_page", `${input.workspaceId}:${input.vaultRoot}:${input.path}`);
+  db.query(`
+    insert into wiki_pages (
+      id, workspace_id, vault_root, path, page_type, title, status,
+      source_count, confidence_score, freshness_score, contradiction_count,
+      last_supported_at, last_contradicted_at, last_reviewed_at, content_hash
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(workspace_id, vault_root, path) do update set
+      page_type = excluded.page_type,
+      title = excluded.title,
+      status = excluded.status,
+      source_count = excluded.source_count,
+      confidence_score = excluded.confidence_score,
+      freshness_score = excluded.freshness_score,
+      contradiction_count = excluded.contradiction_count,
+      last_supported_at = excluded.last_supported_at,
+      last_contradicted_at = excluded.last_contradicted_at,
+      last_reviewed_at = excluded.last_reviewed_at,
+      content_hash = excluded.content_hash,
+      updated_at = datetime('now')
+  `).run(
+    id,
+    input.workspaceId,
+    input.vaultRoot,
+    input.path,
+    input.pageType,
+    input.title,
+    input.status,
+    input.sourceCount ?? 0,
+    input.confidenceScore ?? 0,
+    input.freshnessScore ?? 1,
+    input.contradictionCount ?? 0,
+    input.lastSupportedAt ?? null,
+    input.lastContradictedAt ?? null,
+    input.lastReviewedAt ?? null,
+    input.contentHash ?? null
+  );
+  const row = db.query(`
+    select * from wiki_pages where workspace_id = ? and vault_root = ? and path = ?
+  `).get(input.workspaceId, input.vaultRoot, input.path) as Record<string, unknown> | null;
+  if (!row) throw new Error(`Failed to upsert wiki page ${input.path}`);
+  return wikiPageFromRow(row);
+}
+
+function getWikiPageByPath(db: PodcastNoteDb, input: { workspaceId: string; vaultRoot: string; path: string }): WikiPageRecord | undefined {
+  const row = db.query(`
+    select * from wiki_pages where workspace_id = ? and vault_root = ? and path = ?
+  `).get(input.workspaceId, input.vaultRoot, input.path) as Record<string, unknown> | null;
+  return row ? wikiPageFromRow(row) : undefined;
+}
+
+function deleteWikiPageByPath(db: PodcastNoteDb, input: { workspaceId: string; vaultRoot: string; path: string }): boolean {
+  const result = db.query(`
+    delete from wiki_pages where workspace_id = ? and vault_root = ? and path = ?
+  `).run(input.workspaceId, input.vaultRoot, input.path);
+  return result.changes > 0;
+}
+
+function listWikiPages(db: PodcastNoteDb, options: {
+  workspaceId?: string;
+  vaultRoot?: string;
+  status?: WikiPageStatus;
+  pageType?: WikiPageType;
+  limit?: number;
+}): WikiPageRecord[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (options.workspaceId) {
+    conditions.push("workspace_id = ?");
+    params.push(options.workspaceId);
+  }
+  if (options.vaultRoot) {
+    conditions.push("vault_root = ?");
+    params.push(options.vaultRoot);
+  }
+  if (options.status) {
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  if (options.pageType) {
+    conditions.push("page_type = ?");
+    params.push(options.pageType);
+  }
+  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+  const rows = db.query(`
+    select * from wiki_pages ${where} order by updated_at desc limit ?
+  `).all(...params, normalizeLimit(options.limit)) as Array<Record<string, unknown>>;
+  return rows.map(wikiPageFromRow);
+}
+
+function upsertWikiPageEvidence(db: PodcastNoteDb, input: {
+  workspaceId: string;
+  pageId: string;
+  insightId: string;
+  episodeId: string;
+  watchId?: string;
+  supportType: WikiEvidenceSupportType;
+  claim: string;
+  evidenceExcerpt: string;
+  timestampStartSec?: number;
+  timestampEndSec?: number;
+  confidence?: number;
+  groundednessScore?: number;
+  observedAt: string;
+}): WikiPageEvidenceRecord {
+  const id = stableId("wiki_ev", `${input.pageId}:${input.insightId}:${input.supportType}`);
+  db.query(`
+    insert into wiki_page_evidence (
+      id, workspace_id, page_id, insight_id, episode_id, watch_id, support_type,
+      claim, evidence_excerpt, timestamp_start_sec, timestamp_end_sec,
+      confidence, groundedness_score, observed_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(page_id, insight_id, support_type) do update set
+      workspace_id = excluded.workspace_id,
+      episode_id = excluded.episode_id,
+      watch_id = excluded.watch_id,
+      claim = excluded.claim,
+      evidence_excerpt = excluded.evidence_excerpt,
+      timestamp_start_sec = excluded.timestamp_start_sec,
+      timestamp_end_sec = excluded.timestamp_end_sec,
+      confidence = excluded.confidence,
+      groundedness_score = excluded.groundedness_score,
+      observed_at = excluded.observed_at
+  `).run(
+    id,
+    input.workspaceId,
+    input.pageId,
+    input.insightId,
+    input.episodeId,
+    input.watchId ?? null,
+    input.supportType,
+    input.claim,
+    input.evidenceExcerpt,
+    input.timestampStartSec ?? null,
+    input.timestampEndSec ?? null,
+    input.confidence ?? 0,
+    input.groundednessScore ?? 0,
+    input.observedAt
+  );
+  const row = db.query(`
+    select * from wiki_page_evidence where page_id = ? and insight_id = ? and support_type = ?
+  `).get(input.pageId, input.insightId, input.supportType) as Record<string, unknown> | null;
+  if (!row) throw new Error(`Failed to upsert wiki evidence for ${input.pageId}`);
+  return wikiPageEvidenceFromRow(row);
+}
+
+function listWikiPageEvidence(db: PodcastNoteDb, options: {
+  workspaceId?: string;
+  pageId?: string;
+  insightId?: string;
+  supportType?: WikiEvidenceSupportType;
+  limit?: number;
+}): WikiPageEvidenceRecord[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (options.workspaceId) {
+    conditions.push("workspace_id = ?");
+    params.push(options.workspaceId);
+  }
+  if (options.pageId) {
+    conditions.push("page_id = ?");
+    params.push(options.pageId);
+  }
+  if (options.insightId) {
+    conditions.push("insight_id = ?");
+    params.push(options.insightId);
+  }
+  if (options.supportType) {
+    conditions.push("support_type = ?");
+    params.push(options.supportType);
+  }
+  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+  const rows = db.query(`
+    select * from wiki_page_evidence ${where} order by created_at desc limit ?
+  `).all(...params, normalizeLimit(options.limit)) as Array<Record<string, unknown>>;
+  return rows.map(wikiPageEvidenceFromRow);
 }
 
 function createLarkBindSession(db: PodcastNoteDb, input: {
@@ -2506,6 +2787,48 @@ function wikiUpdateProposalFromRow(row: Record<string, unknown>): WikiUpdateProp
     status: String(row["status"]) as WikiProposalStatus,
     createdAt: String(row["created_at"]),
     updatedAt: String(row["updated_at"])
+  };
+}
+
+function wikiPageFromRow(row: Record<string, unknown>): WikiPageRecord {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    vaultRoot: String(row["vault_root"]),
+    path: String(row["path"]),
+    pageType: String(row["page_type"]) as WikiPageType,
+    title: String(row["title"]),
+    status: String(row["status"]) as WikiPageStatus,
+    sourceCount: Number(row["source_count"] ?? 0),
+    confidenceScore: Number(row["confidence_score"] ?? 0),
+    freshnessScore: Number(row["freshness_score"] ?? 1),
+    contradictionCount: Number(row["contradiction_count"] ?? 0),
+    lastSupportedAt: nullableString(row["last_supported_at"]),
+    lastContradictedAt: nullableString(row["last_contradicted_at"]),
+    lastReviewedAt: nullableString(row["last_reviewed_at"]),
+    contentHash: nullableString(row["content_hash"]),
+    createdAt: String(row["created_at"]),
+    updatedAt: String(row["updated_at"])
+  };
+}
+
+function wikiPageEvidenceFromRow(row: Record<string, unknown>): WikiPageEvidenceRecord {
+  return {
+    id: String(row["id"]),
+    workspaceId: String(row["workspace_id"]),
+    pageId: String(row["page_id"]),
+    insightId: String(row["insight_id"]),
+    episodeId: String(row["episode_id"]),
+    watchId: nullableString(row["watch_id"]),
+    supportType: String(row["support_type"]) as WikiEvidenceSupportType,
+    claim: String(row["claim"]),
+    evidenceExcerpt: String(row["evidence_excerpt"]),
+    timestampStartSec: nullableNumber(row["timestamp_start_sec"]),
+    timestampEndSec: nullableNumber(row["timestamp_end_sec"]),
+    confidence: Number(row["confidence"] ?? 0),
+    groundednessScore: Number(row["groundedness_score"] ?? 0),
+    observedAt: String(row["observed_at"]),
+    createdAt: String(row["created_at"])
   };
 }
 

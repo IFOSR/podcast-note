@@ -12,6 +12,7 @@ import { createLarkBotClient } from "../../../packages/lark/src/index.ts";
 import { deliverEpisodeResultToAllLarkInstallations, deliverPendingWikiProposalSummaryToAllLarkInstallations } from "./lark-delivery.ts";
 import { markdownReport, processTranscript } from "./pipeline.ts";
 import { compileEpisodeToWiki, createDeepSeekTuiWikiProposalProvider } from "../../../packages/wiki/src/index.ts";
+import { recordCompiledWikiRegistry } from "./wiki-registry.ts";
 
 export type UserWatchInput = {
   workspaceId?: string;
@@ -60,6 +61,7 @@ export type ProcessSourceInputsOptions = {
   wikiProposalProvider?: "deepseek-tui";
   maxEpisodesPerSource?: number;
   runId?: string;
+  now?: string;
 };
 
 type SourceEpisodes = {
@@ -253,6 +255,16 @@ async function maybeCompileWiki(input: {
       filePath: path,
       contentHash: compiled.appliedHashes[path] ?? `${input.result.episode.id}:${path}`,
       status: "written"
+    });
+  }
+  if (input.repositories) {
+    recordCompiledWikiRegistry({
+      repositories: input.repositories,
+      vaultRoot,
+      watch: input.watch,
+      result: input.result,
+      compiled,
+      observedAt: input.options.now
     });
   }
 }

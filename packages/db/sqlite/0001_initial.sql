@@ -356,3 +356,87 @@ create table if not exists lark_pending_intents (
 );
 
 create index if not exists lark_pending_intents_chat_status_idx on lark_pending_intents (workspace_id, chat_id, status, created_at desc);
+
+create table if not exists wiki_exports (
+  id text primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  vault_root text not null,
+  episode_id text references episodes(id) on delete cascade,
+  watch_id text references watches(id) on delete set null,
+  export_type text not null check (export_type in ('source_note', 'brief', 'proposal', 'wiki_page', 'lark_doc')),
+  file_path text not null,
+  content_hash text not null,
+  status text not null check (status in ('written', 'skipped', 'failed')),
+  error text,
+  created_at text not null default (datetime('now')),
+  updated_at text not null default (datetime('now')),
+  unique (workspace_id, export_type, file_path)
+);
+
+create index if not exists wiki_exports_workspace_updated_idx on wiki_exports (workspace_id, updated_at desc);
+create index if not exists wiki_exports_episode_idx on wiki_exports (episode_id, export_type);
+
+create table if not exists wiki_update_proposals (
+  id text primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  episode_id text not null references episodes(id) on delete cascade,
+  insight_id text references insights(id) on delete cascade,
+  target_path text not null,
+  proposal_type text not null check (proposal_type in ('create_page', 'append_evidence', 'revise_summary', 'refresh_synthesis', 'flag_conflict', 'add_crosslink', 'mark_stale', 'mark_deprecated', 'archive_page')),
+  title text not null,
+  rationale text not null,
+  patch_json text not null,
+  status text not null check (status in ('pending', 'approved', 'applied', 'rejected', 'failed')),
+  created_at text not null default (datetime('now')),
+  updated_at text not null default (datetime('now'))
+);
+
+create index if not exists wiki_update_proposals_workspace_status_idx on wiki_update_proposals (workspace_id, status, updated_at desc);
+create index if not exists wiki_update_proposals_episode_idx on wiki_update_proposals (episode_id, status);
+
+create table if not exists wiki_pages (
+  id text primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  vault_root text not null,
+  path text not null,
+  page_type text not null check (page_type in ('concept', 'entity', 'claim', 'source', 'brief')),
+  title text not null,
+  status text not null check (status in ('active', 'stale', 'contested', 'deprecated', 'archived')),
+  source_count integer not null default 0,
+  confidence_score real not null default 0,
+  freshness_score real not null default 1,
+  contradiction_count integer not null default 0,
+  last_supported_at text,
+  last_contradicted_at text,
+  last_reviewed_at text,
+  content_hash text,
+  created_at text not null default (datetime('now')),
+  updated_at text not null default (datetime('now')),
+  unique (workspace_id, vault_root, path)
+);
+
+create index if not exists wiki_pages_workspace_status_idx on wiki_pages (workspace_id, status, updated_at desc);
+create index if not exists wiki_pages_workspace_type_idx on wiki_pages (workspace_id, page_type, updated_at desc);
+
+create table if not exists wiki_page_evidence (
+  id text primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  page_id text not null references wiki_pages(id) on delete cascade,
+  insight_id text not null references insights(id) on delete cascade,
+  episode_id text not null references episodes(id) on delete cascade,
+  watch_id text references watches(id) on delete set null,
+  support_type text not null check (support_type in ('supporting', 'contradicting', 'context')),
+  claim text not null,
+  evidence_excerpt text not null,
+  timestamp_start_sec real,
+  timestamp_end_sec real,
+  confidence real not null default 0,
+  groundedness_score real not null default 0,
+  observed_at text not null,
+  created_at text not null default (datetime('now')),
+  unique (page_id, insight_id, support_type)
+);
+
+create index if not exists wiki_page_evidence_workspace_idx on wiki_page_evidence (workspace_id, created_at desc);
+create index if not exists wiki_page_evidence_page_idx on wiki_page_evidence (page_id, support_type);
+create index if not exists wiki_page_evidence_insight_idx on wiki_page_evidence (insight_id);

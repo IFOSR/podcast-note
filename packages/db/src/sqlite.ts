@@ -373,7 +373,7 @@ function ensureWikiSchema(db: PodcastNoteDb): void {
       episode_id text not null references episodes(id) on delete cascade,
       insight_id text references insights(id) on delete cascade,
       target_path text not null,
-      proposal_type text not null check (proposal_type in ('create_page', 'append_evidence', 'revise_summary', 'flag_conflict', 'add_crosslink')),
+      proposal_type text not null check (proposal_type in ('create_page', 'append_evidence', 'revise_summary', 'refresh_synthesis', 'flag_conflict', 'add_crosslink', 'mark_stale', 'mark_deprecated', 'archive_page')),
       title text not null,
       rationale text not null,
       patch_json text not null,
@@ -386,5 +386,97 @@ function ensureWikiSchema(db: PodcastNoteDb): void {
       on wiki_update_proposals (workspace_id, status, updated_at desc);
     create index if not exists wiki_update_proposals_episode_idx
       on wiki_update_proposals (episode_id, status);
+
+    create table if not exists wiki_pages (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      vault_root text not null,
+      path text not null,
+      page_type text not null check (page_type in ('concept', 'entity', 'claim', 'source', 'brief')),
+      title text not null,
+      status text not null check (status in ('active', 'stale', 'contested', 'deprecated', 'archived')),
+      source_count integer not null default 0,
+      confidence_score real not null default 0,
+      freshness_score real not null default 1,
+      contradiction_count integer not null default 0,
+      last_supported_at text,
+      last_contradicted_at text,
+      last_reviewed_at text,
+      content_hash text,
+      created_at text not null default (datetime('now')),
+      updated_at text not null default (datetime('now')),
+      unique (workspace_id, vault_root, path)
+    );
+
+    create index if not exists wiki_pages_workspace_status_idx
+      on wiki_pages (workspace_id, status, updated_at desc);
+    create index if not exists wiki_pages_workspace_type_idx
+      on wiki_pages (workspace_id, page_type, updated_at desc);
+
+    create table if not exists wiki_page_evidence (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      page_id text not null references wiki_pages(id) on delete cascade,
+      insight_id text not null references insights(id) on delete cascade,
+      episode_id text not null references episodes(id) on delete cascade,
+      watch_id text references watches(id) on delete set null,
+      support_type text not null check (support_type in ('supporting', 'contradicting', 'context')),
+      claim text not null,
+      evidence_excerpt text not null,
+      timestamp_start_sec real,
+      timestamp_end_sec real,
+      confidence real not null default 0,
+      groundedness_score real not null default 0,
+      observed_at text not null,
+      created_at text not null default (datetime('now')),
+      unique (page_id, insight_id, support_type)
+    );
+
+    create index if not exists wiki_page_evidence_workspace_idx
+      on wiki_page_evidence (workspace_id, created_at desc);
+    create index if not exists wiki_page_evidence_page_idx
+      on wiki_page_evidence (page_id, support_type);
+    create index if not exists wiki_page_evidence_insight_idx
+      on wiki_page_evidence (insight_id);
+  `);
+  ensureWikiProposalTypeSchema(db);
+}
+
+function ensureWikiProposalTypeSchema(db: PodcastNoteDb): void {
+  const row = db.query(`
+    select sql from sqlite_master where type = 'table' and name = 'wiki_update_proposals'
+  `).get() as { sql?: string } | null;
+  if (!row?.sql || row.sql.includes("refresh_synthesis")) return;
+  db.exec(`
+    pragma foreign_keys = off;
+    create table if not exists wiki_update_proposals_next (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      episode_id text not null references episodes(id) on delete cascade,
+      insight_id text references insights(id) on delete cascade,
+      target_path text not null,
+      proposal_type text not null check (proposal_type in ('create_page', 'append_evidence', 'revise_summary', 'refresh_synthesis', 'flag_conflict', 'add_crosslink', 'mark_stale', 'mark_deprecated', 'archive_page')),
+      title text not null,
+      rationale text not null,
+      patch_json text not null,
+      status text not null check (status in ('pending', 'approved', 'applied', 'rejected', 'failed')),
+      created_at text not null default (datetime('now')),
+      updated_at text not null default (datetime('now'))
+    );
+    insert or ignore into wiki_update_proposals_next (
+      id, workspace_id, episode_id, insight_id, target_path, proposal_type,
+      title, rationale, patch_json, status, created_at, updated_at
+    )
+    select
+      id, workspace_id, episode_id, insight_id, target_path, proposal_type,
+      title, rationale, patch_json, status, created_at, updated_at
+    from wiki_update_proposals;
+    drop table wiki_update_proposals;
+    alter table wiki_update_proposals_next rename to wiki_update_proposals;
+    create index if not exists wiki_update_proposals_workspace_status_idx
+      on wiki_update_proposals (workspace_id, status, updated_at desc);
+    create index if not exists wiki_update_proposals_episode_idx
+      on wiki_update_proposals (episode_id, status);
+    pragma foreign_keys = on;
   `);
 }

@@ -2,7 +2,16 @@ import type { Episode, EpisodeProcessingResult, Insight, Watch } from "../../cor
 
 export type WikiExportType = "source_note" | "brief" | "proposal" | "wiki_page" | "lark_doc";
 export type WikiExportStatus = "written" | "skipped" | "failed";
-export type WikiProposalType = "create_page" | "append_evidence" | "revise_summary" | "flag_conflict" | "add_crosslink";
+export type WikiProposalType =
+  | "create_page"
+  | "append_evidence"
+  | "revise_summary"
+  | "refresh_synthesis"
+  | "flag_conflict"
+  | "add_crosslink"
+  | "mark_stale"
+  | "mark_deprecated"
+  | "archive_page";
 export type WikiProposalStatus = "pending" | "approved" | "applied" | "rejected" | "failed";
 
 export type WikiExportRecord = {
@@ -37,8 +46,10 @@ export type WikiUpdateProposal = {
 
 export type WikiPatch = {
   section: string;
-  operation: "append" | "create";
-  markdown: string;
+  operation: "append" | "create" | "replace_managed_section" | "set_frontmatter" | "move";
+  markdown?: string;
+  frontmatter?: Record<string, string | number | boolean>;
+  targetPath?: string;
   citations: Array<{
     episodeId: string;
     insightId?: string;

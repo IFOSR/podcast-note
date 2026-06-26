@@ -20,6 +20,12 @@ import {
   renderHealthReport,
   updateManagedFile
 } from "../../../packages/wiki/src/index.ts";
+import { recordAppliedWikiProposalRegistry, recordCompiledWikiRegistry } from "./wiki-registry.ts";
+import { buildWikiFeed } from "./wiki-feed.ts";
+import { synthesizeWikiProposals } from "./wiki-synthesis.ts";
+import { buildWikiDecayProposals } from "./wiki-decay.ts";
+import { scanWikiConflictProposals } from "./wiki-conflict.ts";
+import { askWiki } from "./wiki-ask.ts";
 
 const command = process.argv[2] ?? "help";
 
@@ -216,6 +222,15 @@ if (command === "demo") {
           contentHash: item.contentHash,
           status: "written"
         });
+        recordAppliedWikiProposalRegistry({
+          repositories: repos,
+          workspaceId,
+          vaultRoot,
+          proposal: item.proposal,
+          path: item.path,
+          contentHash: item.contentHash,
+          observedAt: flagValue("--now")
+        });
       }
     }
     const issues = await lintVault(vaultRoot);
@@ -246,6 +261,136 @@ if (command === "demo") {
         status: item.proposal.status
       }))
     }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:feed") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const feed = buildWikiFeed({
+      repositories: repos,
+      workspaceId,
+      vaultRoot: flagValue("--vault"),
+      limit: numberFlagValue("--limit") ?? 100
+    });
+    console.log(JSON.stringify(feed, null, flagValue("--format") === "json" ? 2 : 0));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:ask") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+    const question = decodeCliText(flagValue("--question") ?? process.argv[3] ?? "");
+    if (!question) fail("Usage: bun apps/worker/src/cli.ts wiki:ask --question <question> [--workspace-id id] [--vault path]");
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const result = askWiki({
+      repositories: repos,
+      workspaceId,
+      vaultRoot: flagValue("--vault"),
+      question,
+      limit: numberFlagValue("--limit") ?? 5
+    });
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:synthesize") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+    const vaultRoot = flagValue("--vault") ?? process.env["PODCAST_NOTE_OBSIDIAN_VAULT"];
+    if (!vaultRoot) fail("Usage: bun apps/worker/src/cli.ts wiki:synthesize --vault <path> [--workspace-id id] [--since-days 7]");
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const proposals = synthesizeWikiProposals({
+      repositories: repos,
+      workspaceId,
+      vaultRoot,
+      now: flagValue("--now"),
+      limit: numberFlagValue("--limit") ?? 100
+    });
+    for (const proposal of proposals) {
+      repos.upsertWikiUpdateProposal({
+        id: proposal.id,
+        workspaceId: proposal.workspaceId,
+        episodeId: proposal.episodeId,
+        insightId: proposal.insightId,
+        targetPath: proposal.targetPath,
+        proposalType: proposal.proposalType,
+        title: proposal.title,
+        rationale: proposal.rationale,
+        patch: proposal.patch as unknown as Record<string, unknown>,
+        status: proposal.status
+      });
+    }
+    console.log(JSON.stringify({ ok: true, proposalCount: proposals.length, proposals }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:decay") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+    const vaultRoot = flagValue("--vault") ?? process.env["PODCAST_NOTE_OBSIDIAN_VAULT"];
+    if (!vaultRoot) fail("Usage: bun apps/worker/src/cli.ts wiki:decay --vault <path> [--workspace-id id] [--stale-days 90]");
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const proposals = buildWikiDecayProposals({
+      repositories: repos,
+      workspaceId,
+      vaultRoot,
+      now: flagValue("--now"),
+      staleDays: numberFlagValue("--stale-days") ?? 90,
+      limit: numberFlagValue("--limit") ?? 200
+    });
+    for (const proposal of proposals) {
+      repos.upsertWikiUpdateProposal({
+        id: proposal.id,
+        workspaceId: proposal.workspaceId,
+        episodeId: proposal.episodeId,
+        insightId: proposal.insightId,
+        targetPath: proposal.targetPath,
+        proposalType: proposal.proposalType,
+        title: proposal.title,
+        rationale: proposal.rationale,
+        patch: proposal.patch as unknown as Record<string, unknown>,
+        status: proposal.status
+      });
+    }
+    console.log(JSON.stringify({ ok: true, proposalCount: proposals.length, proposals }, null, 2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+} else if (command === "wiki:conflict") {
+  try {
+    const dbPath = flagValue("--db") ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+    const workspaceId = flagValue("--workspace-id") ?? process.env["PODCAST_NOTE_WORKSPACE_ID"] ?? "workspace_local";
+    const vaultRoot = flagValue("--vault") ?? process.env["PODCAST_NOTE_OBSIDIAN_VAULT"];
+    if (!vaultRoot) fail("Usage: bun apps/worker/src/cli.ts wiki:conflict --vault <path> [--workspace-id id]");
+    const repos = createRepositories(openPodcastNoteDb(dbPath));
+    const proposals = scanWikiConflictProposals({
+      repositories: repos,
+      workspaceId,
+      vaultRoot,
+      now: flagValue("--now"),
+      limit: numberFlagValue("--limit") ?? 200
+    });
+    for (const proposal of proposals) {
+      repos.upsertWikiUpdateProposal({
+        id: proposal.id,
+        workspaceId: proposal.workspaceId,
+        episodeId: proposal.episodeId,
+        insightId: proposal.insightId,
+        targetPath: proposal.targetPath,
+        proposalType: proposal.proposalType,
+        title: proposal.title,
+        rationale: proposal.rationale,
+        patch: proposal.patch as unknown as Record<string, unknown>,
+        status: proposal.status
+      });
+    }
+    console.log(JSON.stringify({ ok: true, proposalCount: proposals.length, proposals }, null, 2));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -472,6 +617,11 @@ if (command === "demo") {
       "  process-sources [--watch inputs/watch.json] [--sources inputs/sources.json] [--output outputs] [--obsidian-vault path] [--wiki-auto-apply] [--db storage/podcast-note.sqlite]",
       "  wiki:proposal-status <proposal_id> <pending|approved|applied|rejected|failed>",
       "  wiki:apply-proposals --vault <path> [--workspace-id id] [--status approved|pending]",
+      "  wiki:feed --vault <path> [--workspace-id id]",
+      "  wiki:ask --question <question> [--workspace-id id] [--vault path]",
+      "  wiki:synthesize --vault <path> [--workspace-id id]",
+      "  wiki:decay --vault <path> [--workspace-id id] [--stale-days 90]",
+      "  wiki:conflict --vault <path> [--workspace-id id]",
       "  wiki:brief --vault <path> [--topic title] [--period weekly|topic]",
       "  lark:publish-markdown <markdown-path> --target <file://path|create:|folder:token|wiki:space|update:doc> [--title title]",
       "  m1:run-once [--db storage/podcast-note.sqlite] [--workspace-id id] [--now ISO] [--polling-limit 100] [--processing-limit 10]",
@@ -763,6 +913,18 @@ async function exportProcessedEpisodesToObsidian(input: {
         status: proposal.status
       });
     }
+    recordCompiledWikiRegistry({
+      repositories: input.repositories,
+      vaultRoot: input.vaultRoot,
+      watch,
+      result: {
+        episode: detail.episode,
+        summary: detail.summary,
+        segments: buildSemanticSegments(detail.transcript?.segments ?? []),
+        insights: detail.insights
+      },
+      compiled
+    });
     rows.push({
       episodeId: detail.episode.id,
       title: detail.episode.title,

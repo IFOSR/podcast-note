@@ -18,6 +18,15 @@ import {
 import { processSourceInputs } from "../../../worker/src/process-sources.ts";
 import { runM1Once } from "../../../worker/src/m1-run-once.ts";
 import { deliverPendingLarkEpisodeResultsToAllInstallations, deliverPendingWikiProposalSummaryToAllLarkInstallations } from "../../../worker/src/lark-delivery.ts";
+import { askWiki } from "../../../worker/src/wiki-ask.ts";
+import { buildWikiFeed } from "../../../worker/src/wiki-feed.ts";
+import { recordAppliedWikiProposalRegistry } from "../../../worker/src/wiki-registry.ts";
+import {
+  applyWikiUpdateProposals,
+  lintVault,
+  renderHealthReport,
+  updateManagedFile
+} from "../../../../packages/wiki/src/index.ts";
 import {
   buildLarkBotOpenUrl,
   createLarkBotClient,
@@ -84,6 +93,16 @@ const server = Bun.serve({
       }
       if (url.pathname === "/api/monitor-fragments") {
         return json(monitorFragments(context));
+      }
+      if (url.pathname === "/api/wiki/ask") {
+        const question = url.searchParams.get("question") ?? "";
+        return json(askWiki({
+          repositories: repos,
+          workspaceId: context.workspace.id,
+          vaultRoot: wikiVaultRoot(),
+          question,
+          limit: 5
+        }));
       }
       if (url.pathname === "/api/integrations/feishu") {
         return json({ ok: true, integration: larkBotStatus() });
@@ -260,6 +279,56 @@ const server = Bun.serve({
         recordInsightFeedback({ repositories: repos, context, insightId: stringField(form, "insightId"), action });
         return flashRedirect("/", action === "saved" ? "已保存" : "已标记没用");
       }
+      if (url.pathname === "/api/wiki/proposal-status" && request.method === "POST") {
+        const form = await request.formData();
+        const proposalId = stringField(form, "proposalId");
+        const status = stringField(form, "status") as "pending" | "approved" | "applied" | "rejected" | "failed";
+        if (!["pending", "approved", "applied", "rejected", "failed"].includes(status)) throw new Error(`Unsupported proposal status: ${status}`);
+        const updated = repos.updateWikiUpdateProposalStatus(proposalId, status);
+        if (!updated) throw new Error(`Proposal not found: ${proposalId}`);
+        return flashRedirect("/wiki", status === "approved" ? "已批准知识库更新" : status === "rejected" ? "已拒绝知识库更新" : "已更新 proposal 状态");
+      }
+      if (url.pathname === "/api/wiki/apply-proposals" && request.method === "POST") {
+        const form = await request.formData();
+        const status = (stringField(form, "status") || "approved") as "pending" | "approved";
+        const vaultRoot = wikiVaultRoot();
+        if (!vaultRoot) throw new Error("缺少 PODCAST_NOTE_OBSIDIAN_VAULT，无法应用知识库更新。");
+        const applied = await applyWikiUpdateProposals({
+          vaultRoot,
+          proposals: repos.listWikiUpdateProposals({ workspaceId: context.workspace.id, status, limit: 100 }),
+          now: new Date().toISOString()
+        });
+        for (const item of applied) {
+          repos.updateWikiUpdateProposalStatus(item.proposal.id, item.proposal.status);
+          if (item.proposal.status !== "applied" || !item.contentHash) continue;
+          repos.recordWikiExport({
+            workspaceId: context.workspace.id,
+            vaultRoot,
+            episodeId: item.proposal.episodeId,
+            exportType: "wiki_page",
+            filePath: item.path,
+            contentHash: item.contentHash,
+            status: "written"
+          });
+          recordAppliedWikiProposalRegistry({
+            repositories: repos,
+            workspaceId: context.workspace.id,
+            vaultRoot,
+            proposal: item.proposal,
+            path: item.path,
+            contentHash: item.contentHash
+          });
+        }
+        const issues = await lintVault(vaultRoot);
+        await updateManagedFile({
+          vaultRoot,
+          relativePath: "health.md",
+          title: "Wiki Health",
+          marker: "health",
+          body: renderHealthReport(issues)
+        });
+        return flashRedirect("/wiki", `已应用 ${applied.filter((item) => item.proposal.status === "applied").length} 个知识库更新`);
+      }
       if (url.pathname === "/api/watch-action" && request.method === "POST") {
         const form = await request.formData();
         const watchId = stringField(form, "watchId");
@@ -300,6 +369,10 @@ const server = Bun.serve({
       if (url.pathname === "/monitor") {
         const notice = noticeForRequest(request, url);
         return html(renderHome(context, notice.message, "monitor"), 200, notice.headers);
+      }
+      if (url.pathname === "/wiki") {
+        const notice = noticeForRequest(request, url);
+        return html(renderWikiPage(context, url, notice.message), 200, notice.headers);
       }
       if (url.pathname === "/integrations/feishu") {
         const notice = noticeForRequest(request, url);
@@ -1246,7 +1319,7 @@ function renderHome(context: SessionContext, notice: string | null | undefined, 
     <span class="badge">Local preview</span>
     <h1>Podcast Note</h1>
     <p class="muted">${isMonitorPage ? "监控任务是长期任务：填写目标站点或平台、频道或主播、可选关键词和运行频率。" : "即时处理是一次性任务：粘贴一个具体播客链接，直接开始转写、总结和提炼核心观点。"}</p>
-    <nav class="nav" aria-label="页面导航"><a class="${isMonitorPage ? "" : "active"}" href="/">即时处理</a><a class="${isMonitorPage ? "active" : ""}" href="/monitor">监控任务</a><a href="/integrations/feishu">飞书集成</a></nav>
+    ${renderMainNav(isMonitorPage ? "monitor" : "process")}
   </header>
   ${notice ? `<p class="notice">${escapeHtml(notice)}</p>` : ""}
   ${renderAssistantPanel()}
@@ -1561,7 +1634,7 @@ async function renderFeishuIntegrationPage(context: SessionContext, request: Req
   <header>
     <h1>扫码接入 Podcast Note 机器人</h1>
     <p class="muted">用户用飞书扫码后，先走个人私聊接收：给 Podcast Note 机器人发一条消息即可绑定。团队群聊接收先暂缓，后续再开放。</p>
-    <nav class="nav"><a href="/">即时处理</a><a href="/monitor">监控任务</a><a class="active" href="/integrations/feishu">飞书集成</a></nav>
+    ${renderMainNav("feishu")}
   </header>
   ${notice ? `<p class="notice">${escapeHtml(notice)}</p>` : ""}
   <section class="card">
@@ -1660,6 +1733,156 @@ async function renderFeishuIntegrationPage(context: SessionContext, request: Req
 </main>
 </body>
 </html>`;
+}
+
+function renderWikiPage(context: SessionContext, url: URL, notice: string | null | undefined): string {
+  const vaultRoot = wikiVaultRoot();
+  const feed = buildWikiFeed({
+    repositories: repos,
+    workspaceId: context.workspace.id,
+    vaultRoot,
+    limit: 50
+  });
+  const pages = repos.listWikiPages({ workspaceId: context.workspace.id, vaultRoot, limit: 200 });
+  const pending = repos.listWikiUpdateProposals({ workspaceId: context.workspace.id, status: "pending", limit: 50 });
+  const conflictProposals = pending.filter((proposal) => proposal.proposalType === "flag_conflict");
+  const contestedPages = pages.filter((page) => page.status === "contested");
+  const stalePages = pages.filter((page) => page.status === "stale" || page.status === "deprecated" || page.status === "contested");
+  const question = url.searchParams.get("question")?.trim() ?? "";
+  const askResult = question
+    ? askWiki({
+      repositories: repos,
+      workspaceId: context.workspace.id,
+      vaultRoot,
+      question,
+      limit: 5
+    })
+    : undefined;
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>知识库 · Podcast Note</title>
+  <style>
+    :root { color-scheme: light; --bg: #f5f7fb; --card: #ffffff; --text: #172033; --muted: #667085; --line: #e5e7eb; --blue: #2563eb; --blue-soft: #eff6ff; --green: #047857; --red: #b42318; --ink: #0f172a; --amber: #b45309; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: radial-gradient(circle at top left, #dcfce7, transparent 28rem), radial-gradient(circle at bottom right, #dbeafe, transparent 32rem), var(--bg); color: var(--text); }
+    main { max-width: 1120px; margin: 0 auto; padding: 30px 18px 56px; }
+    header { margin-bottom: 22px; }
+    h1 { font-size: 34px; margin: 0 0 8px; letter-spacing: -0.035em; color: var(--ink); }
+    h2 { font-size: 19px; margin: 0 0 8px; color: var(--ink); }
+    h3 { font-size: 15px; margin: 0 0 6px; }
+    p { line-height: 1.55; }
+    .muted { color: var(--muted); }
+    .small { font-size: 13px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: #ecfdf3; color: #047857; font-weight: 800; font-size: 12px; }
+    .nav { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    .nav a { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #d0d5dd; border-radius: 999px; padding: 8px 13px; color: #344054; background: #ffffff; font-weight: 800; text-decoration: none; }
+    .nav a.active { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+    .notice { margin: 0 0 16px; padding: 12px 14px; border: 1px solid #bfdbfe; background: #eff6ff; color: #1e40af; border-radius: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 16px; align-items: start; }
+    .overview { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 10px; }
+    .card, .metric, .item { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06); }
+    .metric { box-shadow: none; }
+    .metric strong { display: block; font-size: 26px; color: var(--ink); }
+    .stack { display: grid; gap: 12px; }
+    .item { padding: 14px; box-shadow: none; }
+    .item.conflict { border-color: #fed7aa; background: #fffbeb; }
+    .item.stale { border-color: #e5e7eb; background: #fcfcfd; }
+    .pill { display: inline-flex; border-radius: 999px; padding: 3px 8px; background: #eff6ff; color: #1d4ed8; font-size: 12px; font-weight: 800; }
+    .pill.warn { background: #fffbeb; color: var(--amber); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    button, .button { display: inline-flex; justify-content: center; align-items: center; border: 0; border-radius: 10px; padding: 9px 12px; background: var(--blue); color: white; font-weight: 800; text-decoration: none; cursor: pointer; }
+    .secondary { background: #f2f4f7; color: #344054; border: 1px solid #d0d5dd; }
+    input, textarea { width: 100%; border: 1px solid #d0d5dd; border-radius: 12px; padding: 11px 12px; font: inherit; background: white; color: var(--text); }
+    .ask-answer { white-space: pre-wrap; border: 1px solid #dbeafe; border-radius: 14px; padding: 14px; background: #f8fbff; }
+    .citation { border-left: 4px solid #93c5fd; padding: 8px 10px; background: #ffffff; border-radius: 8px; margin-top: 8px; }
+    code { background: #eef2ff; border-radius: 6px; padding: 1px 5px; }
+    a { color: #1d4ed8; }
+    @media (max-width: 820px) { .grid, .overview { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="badge">Living Wiki</span>
+    <h1>知识库</h1>
+    <p class="muted">这里展示后台持续生成的知识动态、待审更新、冲突提醒、衰退知识和带引用的 Ask Wiki。</p>
+    ${renderMainNav("wiki")}
+  </header>
+  ${notice ? `<p class="notice">${escapeHtml(notice)}</p>` : ""}
+  <section class="card">
+    <h2>知识库总览</h2>
+    <div class="overview">
+      ${metric("活跃知识页", feed.counts.activePages)}
+      ${metric("待审 proposal", feed.counts.pendingProposals)}
+      ${metric("冲突提醒", feed.counts.conflicts)}
+      ${metric("衰退知识", feed.counts.stalePages)}
+      ${metric("已归档", feed.counts.archivedPages)}
+      ${metric("总知识页", feed.counts.pages)}
+    </div>
+  </section>
+  <section class="grid" style="margin-top:16px;">
+    <div class="card">
+      <h2>知识动态 Feed</h2>
+      <div class="stack">${feed.feed.length ? feed.feed.slice(0, 8).map((item) => `<article class="item"><span class="pill">${escapeHtml(item.type)}</span><h3>${escapeHtml(item.title)}</h3><p class="muted small">${escapeHtml(item.targetPath ?? "无目标路径")}</p>${item.rationale ? `<p>${escapeHtml(item.rationale)}</p>` : ""}</article>`).join("") : `<p class="muted">暂无知识动态。处理播客并运行 synthesis/decay/conflict 后，这里会出现变化。</p>`}</div>
+    </div>
+    <div class="card">
+      <h2>待审更新</h2>
+      <form method="post" action="/api/wiki/apply-proposals" class="actions"><input type="hidden" name="status" value="approved"/><button type="submit">应用已批准更新</button></form>
+      <div class="stack">${pending.length ? pending.slice(0, 8).map(renderPendingProposalCard).join("") : `<p class="muted">暂无待审更新。</p>`}</div>
+    </div>
+    <div class="card">
+      <h2>冲突提醒</h2>
+      <div class="stack">${(conflictProposals.length || contestedPages.length) ? [
+        ...conflictProposals.slice(0, 8).map((proposal) => `<article class="item conflict"><span class="pill warn">conflict_detected</span><h3>${escapeHtml(proposal.title)}</h3><p class="muted small">${escapeHtml(proposal.targetPath)}</p><p>${escapeHtml(proposal.rationale)}</p></article>`),
+        ...contestedPages.slice(0, 8).map((page) => `<article class="item conflict"><span class="pill warn">contested</span><h3>${escapeHtml(page.title)}</h3><p class="muted small">${escapeHtml(page.path)}</p><p>该页面已有已应用冲突证据，需要结合支持证据和反证一起阅读。</p></article>`)
+      ].join("") : `<p class="muted">暂无冲突提醒。</p>`}</div>
+    </div>
+    <div class="card">
+      <h2>衰退知识</h2>
+      <div class="stack">${stalePages.length ? stalePages.slice(0, 8).map((page) => `<article class="item stale"><span class="pill warn">${escapeHtml(page.status)}</span><h3>${escapeHtml(page.title)}</h3><p class="muted small">${escapeHtml(page.path)}</p><p class="small">freshness_score=${escapeHtml(page.freshnessScore)} · source_count=${escapeHtml(page.sourceCount)}</p></article>`).join("") : `<p class="muted">暂无 stale/deprecated/contested 页面。</p>`}</div>
+    </div>
+  </section>
+  <section class="card" style="margin-top:16px;">
+    <h2>Ask Wiki</h2>
+    <form method="get" action="/wiki">
+      <label for="question" class="small muted">问题</label>
+      <input id="question" name="question" value="${escapeHtml(question)}" placeholder="例如：AI Agent 商业化有什么结论？" />
+      <p><button type="submit">问知识库</button></p>
+    </form>
+    ${askResult ? `<div class="ask-answer">${escapeHtml(askResult.answer)}</div>${askResult.citations.map((citation) => `<div class="citation"><strong>${escapeHtml(citation.wikiPath)}</strong><br/><span class="small">${escapeHtml(citation.episodeTitle)}${citation.timestamp ? ` · ${escapeHtml(citation.timestamp)}` : ""}${citation.episodeUrl ? ` · ${escapeHtml(citation.episodeUrl)}` : ""}</span></div>`).join("")}` : `<p class="muted">输入问题后，会只基于 wiki page、insight 和 source citation 回答；证据不足时会明确说明不足。</p>`}
+  </section>
+</main>
+</body>
+</html>`;
+}
+
+function renderMainNav(active: "process" | "monitor" | "wiki" | "feishu"): string {
+  return `<nav class="nav" aria-label="页面导航"><a class="${active === "process" ? "active" : ""}" href="/">即时处理</a><a class="${active === "monitor" ? "active" : ""}" href="/monitor">监控任务</a><a class="${active === "wiki" ? "active" : ""}" href="/wiki">知识库</a><a class="${active === "feishu" ? "active" : ""}" href="/integrations/feishu">飞书集成</a></nav>`;
+}
+
+function wikiVaultRoot(): string | undefined {
+  return process.env["PODCAST_NOTE_OBSIDIAN_VAULT"] || undefined;
+}
+
+function metric(label: string, value: number): string {
+  return `<div class="metric"><strong>${escapeHtml(value)}</strong><span class="muted small">${escapeHtml(label)}</span></div>`;
+}
+
+function renderPendingProposalCard(proposal: ReturnType<typeof repos.listWikiUpdateProposals>[number]): string {
+  return `<article class="item">
+    <span class="pill">${escapeHtml(proposal.proposalType)}</span>
+    <h3>${escapeHtml(proposal.title)}</h3>
+    <p class="muted small">${escapeHtml(proposal.targetPath)}</p>
+    <p>${escapeHtml(proposal.rationale)}</p>
+    <div class="actions">
+      <form method="post" action="/api/wiki/proposal-status"><input type="hidden" name="proposalId" value="${escapeHtml(proposal.id)}"/><input type="hidden" name="status" value="approved"/><button type="submit">批准</button></form>
+      <form method="post" action="/api/wiki/proposal-status"><input type="hidden" name="proposalId" value="${escapeHtml(proposal.id)}"/><input type="hidden" name="status" value="rejected"/><button class="secondary" type="submit">拒绝</button></form>
+      <a class="button secondary" href="/wiki?question=${encodeURIComponent(proposal.title)}">追问</a>
+    </div>
+  </article>`;
 }
 
 function renderAssistantPanel(): string {
