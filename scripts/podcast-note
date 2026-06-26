@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 PID_FILE="$ROOT_DIR/.podcast-note.pid"
 LOG_FILE="$ROOT_DIR/.podcast-note.log"
 DB_PATH="$ROOT_DIR/storage/podcast-note.sqlite"
+WIKI_VAULT_PATH="${PODCAST_NOTE_OBSIDIAN_VAULT:-}"
 LARK_CLI_HOME="$ROOT_DIR/.runtime/lark-cli-home"
 LARK_PID_FILE=""
 LARK_LOG_FILE=""
@@ -27,6 +28,7 @@ Options:
   --host <host>        Host for preview server. Default: 127.0.0.1
   --port <port>        Port for preview server. Default: 3000
   --db <path>          SQLite database path. Default: storage/podcast-note.sqlite
+  --wiki-vault <path>  Obsidian wiki vault path. Default: storage/wiki-vault
   --pid-file <path>    PID file path. Default: .podcast-note.pid
   --log-file <path>    Log file path. Default: .podcast-note.log
   --lark-pid-file <path>
@@ -69,6 +71,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --db)
       DB_PATH="${2:?--db requires a value}"
+      shift 2
+      continue
+      ;;
+    --wiki-vault)
+      WIKI_VAULT_PATH="${2:?--wiki-vault requires a value}"
       shift 2
       continue
       ;;
@@ -137,6 +144,10 @@ load_env() {
   # shellcheck disable=SC1090
   source "$env_file"
   set +a
+}
+
+ensure_wiki_vault_path() {
+  WIKI_VAULT_PATH="${WIKI_VAULT_PATH:-${PODCAST_NOTE_OBSIDIAN_VAULT:-storage/wiki-vault}}"
 }
 
 is_running() {
@@ -244,12 +255,13 @@ start_server() {
   stop_orphan_listeners
 
   load_env
+  ensure_wiki_vault_path
   mkdir -p "$(dirname "$PID_FILE")" "$(dirname "$LOG_FILE")" "$(dirname "$DB_PATH")"
   : > "$LOG_FILE"
   if command -v setsid >/dev/null 2>&1; then
-    setsid nohup bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" >> "$LOG_FILE" 2>&1 < /dev/null &
+    setsid nohup bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" --wiki-vault "$WIKI_VAULT_PATH" >> "$LOG_FILE" 2>&1 < /dev/null &
   else
-    nohup bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" >> "$LOG_FILE" 2>&1 < /dev/null &
+    nohup bun apps/web/src/server/preview.ts --host "$HOST" --port "$PORT" --db "$DB_PATH" --wiki-vault "$WIKI_VAULT_PATH" >> "$LOG_FILE" 2>&1 < /dev/null &
   fi
   local pid=$!
   disown "$pid" 2>/dev/null || true

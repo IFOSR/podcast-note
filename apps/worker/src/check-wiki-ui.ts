@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -13,12 +13,12 @@ const url = `http://127.0.0.1:${port}`;
 let server: ReturnType<typeof Bun.spawn> | undefined;
 try {
   server = Bun.spawn({
-    cmd: ["bun", "apps/web/src/server/preview.ts", "--port", String(port), "--db", dbPath],
+    cmd: ["bun", "apps/web/src/server/preview.ts", "--port", String(port), "--db", dbPath, "--wiki-vault", vaultRoot],
     cwd: process.cwd(),
     env: {
       ...process.env,
       PATH: `${process.env.HOME}/.bun/bin:${process.env.PATH ?? ""}`,
-      PODCAST_NOTE_OBSIDIAN_VAULT: vaultRoot,
+      PODCAST_NOTE_OBSIDIAN_VAULT: "",
       VOLCENGINE_ASR_API_KEY: "",
       VOLCENGINE_ASR_APP_ID: "",
       VOLCENGINE_ASR_ACCESS_TOKEN: "",
@@ -61,6 +61,13 @@ try {
   assertIncludes(approvedWiki, "发现冲突：旧 Agent 结论", "批准后的 proposal 仍应显示为待应用，不能从知识库页面消失。");
   assertIncludes(approvedWiki, "已批准待应用", "批准后的 proposal 需要明确展示待应用状态。");
   assertIncludes(approvedWiki, "应用已批准更新", "已批准 proposal 需要保留应用入口。");
+  const applyResponse = postForm(`${url}/api/wiki/apply-proposals`, { status: "approved" });
+  if (!applyResponse.includes("/wiki")) throw new Error(`Applying approved wiki proposals should redirect to /wiki, got ${applyResponse}`);
+  const applied = appliedProposalStatus();
+  if (applied !== "applied") throw new Error(`Applying from UI should persist applied status, got ${applied}`);
+  if (!existsSync(join(vaultRoot, "40 Claims/旧 Agent 结论.md"))) {
+    throw new Error("Applying from UI should write the proposal target into the configured wiki vault.");
+  }
 
   const api = JSON.parse(fetchText(`${url}/api/wiki/ask?question=${encodeURIComponent("量子烹饪有什么结论？")}`)) as { ok: boolean; insufficient: boolean; citations: unknown[] };
   if (!api.ok || !api.insufficient || api.citations.length !== 0) {
@@ -71,6 +78,12 @@ try {
 } finally {
   if (server) server.kill();
   rmSync(dir, { recursive: true, force: true });
+}
+
+function appliedProposalStatus(): string | undefined {
+  const repos = createRepositories(openPodcastNoteDb(dbPath));
+  return repos.listWikiUpdateProposals({ limit: 10 })
+    .find((proposal) => proposal.id === "wiki_prop_ui_conflict")?.status;
 }
 
 function seedWikiData(): void {

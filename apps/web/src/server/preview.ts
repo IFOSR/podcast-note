@@ -42,6 +42,7 @@ const options = parseArgs(process.argv.slice(2));
 const port = Number(options["port"] ?? process.env["PORT"] ?? 3000);
 const host = options["host"] ?? process.env["HOST"] ?? "127.0.0.1";
 const dbPath = options["db"] ?? process.env["PODCAST_NOTE_DB_PATH"] ?? "storage/podcast-note.sqlite";
+const wikiVaultPath = firstNonEmpty(options["wiki-vault"], process.env["PODCAST_NOTE_OBSIDIAN_VAULT"], "storage/wiki-vault");
 const token = options["token"] ?? process.env["PODCAST_NOTE_SESSION_TOKEN"] ?? "local-dev-token";
 const schedulerEnabled = booleanOption(options["scheduler"], process.env["PODCAST_NOTE_SCHEDULER_ENABLED"], true);
 const schedulerIntervalMs = numberOption(options["scheduler-interval-ms"], process.env["PODCAST_NOTE_SCHEDULER_INTERVAL_MS"], 5 * 60 * 1000);
@@ -292,7 +293,6 @@ const server = Bun.serve({
         const form = await request.formData();
         const status = (stringField(form, "status") || "approved") as "pending" | "approved";
         const vaultRoot = wikiVaultRoot();
-        if (!vaultRoot) throw new Error("缺少 PODCAST_NOTE_OBSIDIAN_VAULT，无法应用知识库更新。");
         const applied = await applyWikiUpdateProposals({
           vaultRoot,
           proposals: repos.listWikiUpdateProposals({ workspaceId: context.workspace.id, status, limit: 100 }),
@@ -1865,8 +1865,8 @@ function renderMainNav(active: "process" | "monitor" | "wiki" | "feishu"): strin
   return `<nav class="nav" aria-label="页面导航"><a class="${active === "process" ? "active" : ""}" href="/">即时处理</a><a class="${active === "monitor" ? "active" : ""}" href="/monitor">监控任务</a><a class="${active === "wiki" ? "active" : ""}" href="/wiki">知识库</a><a class="${active === "feishu" ? "active" : ""}" href="/integrations/feishu">飞书集成</a></nav>`;
 }
 
-function wikiVaultRoot(): string | undefined {
-  return process.env["PODCAST_NOTE_OBSIDIAN_VAULT"] || undefined;
+function wikiVaultRoot(): string {
+  return wikiVaultPath;
 }
 
 function metric(label: string, value: number): string {
@@ -2742,6 +2742,13 @@ function parseArgs(args: string[]): Record<string, string> {
     parsed[arg.slice(2)] = args[i + 1] && !args[i + 1].startsWith("--") ? args[++i] : "true";
   }
   return parsed;
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    if (value?.trim()) return value;
+  }
+  return "";
 }
 
 function booleanOption(optionValue: string | undefined, envValue: string | undefined, fallback: boolean): boolean {
