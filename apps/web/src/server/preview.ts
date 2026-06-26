@@ -2,7 +2,7 @@ import type { Episode, EpisodeSummary, Source, TranscriptSegment, Watch } from "
 import QRCode from "qrcode";
 import { readFileSync } from "node:fs";
 import { stableId } from "../../../../packages/core/src/format.ts";
-import { createCodexInsightProvider, createCodexIntentAssistantProvider, createVolcengineTranscriptProvider } from "../../../../packages/ai/src/index.ts";
+import { createCommandLineInsightProvider, createCommandLineIntentAssistantProvider, createVolcengineTranscriptProvider } from "../../../../packages/ai/src/index.ts";
 import type { IntentAssistantOutput } from "../../../../packages/ai/src/index.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../../packages/db/src/index.ts";
 import {
@@ -357,7 +357,7 @@ async function processWithRealProviders(input: {
       maxEpisodesPerSource: input.maxEpisodesPerSource
     },
     transcriptProvider: createVolcengineTranscriptProvider(),
-    insightProvider: createCodexInsightProvider(),
+    insightProvider: createCommandLineInsightProvider(),
     repositories: repos
   });
   if (input.frequency || input.backfillDays !== undefined) {
@@ -380,7 +380,7 @@ async function processWithRealProviders(input: {
 }
 
 async function analyzeUserIntent(inputContext: SessionContext, message: string): Promise<IntentAssistantOutput> {
-  const provider = createCodexIntentAssistantProvider();
+  const provider = createCommandLineIntentAssistantProvider();
   return provider.analyze({
     message,
     outputLanguage: "zh-CN",
@@ -527,7 +527,7 @@ async function runMonitorSchedulerTick(reason: "startup" | "interval" | "manual"
       pollingEpisodeLimit: schedulerPollingLimit,
       processingLimit: schedulerProcessingLimit,
       transcriptProvider: createVolcengineTranscriptProvider(),
-      insightProvider: createCodexInsightProvider()
+      insightProvider: createCommandLineInsightProvider()
     });
     const larkDelivery = await deliverPendingLarkResultsAfterMonitorTick();
     if (requeuedStaleJobs > 0 || requeuedFailedJobs > 0 || result.pollingJobs > 0 || result.queuedEpisodes > 0 || result.processedJobs > 0 || result.failedJobs > 0 || (larkDelivery?.sent ?? 0) > 0) {
@@ -713,7 +713,7 @@ async function processMonitorRun(input: {
         runId: input.runId
       },
       transcriptProvider: createVolcengineTranscriptProvider(),
-      insightProvider: createCodexInsightProvider(),
+      insightProvider: createCommandLineInsightProvider(),
       repositories: repos
     });
   } catch (error) {
@@ -726,7 +726,7 @@ function assertRealProcessingConfigured(): void {
   const hasVolcengineAuth = Boolean(process.env["VOLCENGINE_ASR_API_KEY"] || process.env["VOLCENGINE_ASR_APP_ID"]);
   const hasVolcengineToken = Boolean(process.env["VOLCENGINE_ASR_API_KEY"] || process.env["VOLCENGINE_ASR_ACCESS_TOKEN"]);
   if (!hasVolcengineAuth || !hasVolcengineToken) {
-    throw new Error("真实处理未配置：需要 VOLCENGINE_ASR_API_KEY，或同时提供 VOLCENGINE_ASR_APP_ID 和 VOLCENGINE_ASR_ACCESS_TOKEN。Web 不再使用 mock 数据。");
+    throw new Error("真实处理未配置：需要 VOLCENGINE_ASR_API_KEY，或同时提供 VOLCENGINE_ASR_APP_ID 和 VOLCENGINE_ASR_ACCESS_TOKEN。本地 LLM 会按 DeepSeek TUI -> Kimi Code fallback 调用，Web 不再使用 mock 数据。");
   }
 }
 
@@ -1665,7 +1665,7 @@ async function renderFeishuIntegrationPage(context: SessionContext, request: Req
 function renderAssistantPanel(): string {
   return `<section class="card assistant-card full">
     <h2>智能问答与意图识别</h2>
-    <p class="muted small">直接说你想做什么。Podcast Note 会用本地 Codex CLI 判断你是要处理链接、创建监控、查询状态，还是询问已有播客知识。</p>
+    <p class="muted small">直接说你想做什么。Podcast Note 会先用本地 DeepSeek TUI 判断意图，失败时自动 fallback 到本地 Kimi Code。</p>
     <form data-assistant-form>
       <label for="assistantMessage">你想让 Podcast Note 帮你做什么？</label>
       <textarea id="assistantMessage" name="message" placeholder="例如：帮我监控小宇宙的硅谷101，每天检查 AI Agent 相关内容。"></textarea>

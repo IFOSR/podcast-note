@@ -1,29 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { stableId } from "../../core/src/format.ts";
 import type { EpisodeSummary, Insight, OutputLanguage, SemanticSegment } from "../../core/src/types.ts";
-import type {
-  EpisodeSummaryInput,
-  InsightProvider,
-  IntentAssistantInput,
-  IntentAssistantOutput,
-  IntentAssistantProvider,
-  WatchInsightInput
-} from "./types.ts";
+import type { IntentAssistantOutput, WatchInsightInput } from "./types.ts";
 import { promptVersions } from "./types.ts";
 
-type CodexInsightProviderOptions = {
-  command?: string;
-  model?: string;
-  cwd?: string;
-  timeoutMs?: number;
-};
+export type SummaryResponse = EpisodeSummary;
 
-type SummaryResponse = EpisodeSummary;
-
-type InsightResponse = {
+export type InsightResponse = {
   insights: Array<{
     segmentIndex: number;
     claim: string;
@@ -56,174 +38,7 @@ const suggestedActionValues = new Set<IntentAssistantOutput["suggestedAction"]["
   "open_feishu_page"
 ]);
 
-export function createCodexInsightProvider(options: CodexInsightProviderOptions = {}): InsightProvider {
-  const command = options.command ?? process.env["CODEX_COMMAND"] ?? "codex";
-  const model = options.model ?? process.env["CODEX_INSIGHT_MODEL"] ?? "gpt-5.5";
-  const cwd = options.cwd ?? process.cwd();
-  const timeoutMs = options.timeoutMs ?? numberFromEnv("CODEX_INSIGHT_TIMEOUT_MS", 30 * 60 * 1000);
-
-  return {
-    name: "codex",
-    model,
-    async summarizeEpisode(input: EpisodeSummaryInput): Promise<EpisodeSummary> {
-      const output = await runCodexJson<SummaryResponse>({
-        command,
-        model,
-        cwd,
-        timeoutMs,
-        schema: episodeSummarySchema,
-        prompt: [
-          summarySystemPrompt(input.outputLanguage),
-          "",
-          "Summarize this podcast episode from transcript segments. Return only JSON that matches the schema.",
-          "",
-          `Episode: ${JSON.stringify(input.episode)}`,
-          "",
-          `Segments: ${JSON.stringify(segmentPayload(input.segments))}`
-        ].join("\n")
-      });
-
-      return normalizeSummary(output, input.segments);
-    },
-    async extractWatchInsights(input: WatchInsightInput): Promise<Insight[]> {
-      const output = await runCodexJson<InsightResponse>({
-        command,
-        model,
-        cwd,
-        timeoutMs,
-        schema: watchInsightsSchema,
-        prompt: [
-          insightSystemPrompt(input.outputLanguage),
-          "",
-          "Extract only watch-specific insights. Return only JSON that matches the schema.",
-          "",
-          `Episode: ${JSON.stringify(input.episode)}`,
-          "",
-          `Watch: ${JSON.stringify(input.watch)}`,
-          "",
-          `Segments: ${JSON.stringify(segmentPayload(input.segments))}`
-        ].join("\n")
-      });
-
-      return normalizeInsights(output, input, model);
-    }
-  };
-}
-
-export function createCodexIntentAssistantProvider(options: CodexInsightProviderOptions = {}): IntentAssistantProvider {
-  const command = options.command ?? process.env["CODEX_COMMAND"] ?? "codex";
-  const model = options.model ?? process.env["CODEX_INTENT_MODEL"] ?? process.env["CODEX_INSIGHT_MODEL"] ?? "gpt-5.5";
-  const cwd = options.cwd ?? process.cwd();
-  const timeoutMs = options.timeoutMs ?? numberFromEnv("CODEX_INTENT_TIMEOUT_MS", 2 * 60 * 1000);
-
-  return {
-    name: "codex-intent-assistant",
-    model,
-    async analyze(input: IntentAssistantInput): Promise<IntentAssistantOutput> {
-      const output = await runCodexJson<IntentAssistantOutput>({
-        command,
-        model,
-        cwd,
-        timeoutMs,
-        schema: intentAssistantSchema,
-        prompt: [
-          intentAssistantSystemPrompt(input.outputLanguage),
-          "",
-          "Analyze the user message for Podcast Note. Return only JSON that matches the schema.",
-          "",
-          `User message: ${JSON.stringify(input.message)}`,
-          "",
-          `Product context: ${JSON.stringify(input.context ?? {})}`
-        ].join("\n")
-      });
-
-      return normalizeIntentAssistantOutput(output);
-    }
-  };
-}
-
-async function runCodexJson<T>(input: {
-  command: string;
-  model: string;
-  cwd: string;
-  timeoutMs: number;
-  schema: Record<string, unknown>;
-  prompt: string;
-}): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "podcast-note-codex-"));
-  const schemaPath = join(dir, "schema.json");
-  const outputPath = join(dir, "output.json");
-
-  try {
-    await writeFile(schemaPath, JSON.stringify(input.schema, null, 2));
-    await runCommand({
-      command: input.command,
-      args: [
-        "exec",
-        "--sandbox",
-        "read-only",
-        "--model",
-        input.model,
-        "--output-schema",
-        schemaPath,
-        "--output-last-message",
-        outputPath,
-        "--cd",
-        input.cwd,
-        "-"
-      ],
-      stdin: input.prompt,
-      timeoutMs: input.timeoutMs
-    });
-
-    const raw = await readFile(outputPath, "utf8");
-    return JSON.parse(raw) as T;
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-async function runCommand(input: {
-  command: string;
-  args: string[];
-  stdin: string;
-  timeoutMs: number;
-}): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(input.command, input.args, {
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`Codex insight generation timed out after ${input.timeoutMs}ms.`));
-    }, input.timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`codex exec failed with code ${code ?? "unknown"}: ${stderr || stdout}`.trim()));
-    });
-
-    child.stdin.end(input.stdin);
-  });
-}
-
-function normalizeSummary(response: SummaryResponse, segments: SemanticSegment[]): EpisodeSummary {
+export function normalizeEpisodeSummary(response: SummaryResponse, segments: SemanticSegment[]): EpisodeSummary {
   if (typeof response.oneLiner !== "string") throw new Error("summary.oneLiner must be a string.");
   if (typeof response.overview !== "string") throw new Error("summary.overview must be a string.");
   if (!Array.isArray(response.chapters)) throw new Error("summary.chapters must be an array.");
@@ -258,7 +73,7 @@ function normalizeSummary(response: SummaryResponse, segments: SemanticSegment[]
   };
 }
 
-function normalizeInsights(response: InsightResponse, input: WatchInsightInput, model: string): Insight[] {
+export function normalizeWatchInsights(response: InsightResponse, input: WatchInsightInput, model: string): Insight[] {
   if (!Array.isArray(response.insights)) throw new Error("insights must be an array.");
 
   return response.insights.slice(0, 8).map((rawInsight) => {
@@ -269,7 +84,7 @@ function normalizeInsights(response: InsightResponse, input: WatchInsightInput, 
     const evidenceExcerpt = stringOrFallback(rawInsight.evidenceExcerpt, "").trim();
 
     if (!claim || !evidenceExcerpt) {
-      throw new Error("Codex insight response must include non-empty claim and evidenceExcerpt.");
+      throw new Error("LLM insight response must include non-empty claim and evidenceExcerpt.");
     }
 
     return {
@@ -298,7 +113,7 @@ function normalizeInsights(response: InsightResponse, input: WatchInsightInput, 
   });
 }
 
-function segmentPayload(segments: SemanticSegment[]): Array<{
+export function segmentPayload(segments: SemanticSegment[]): Array<{
   index: number;
   startSec: number;
   endSec: number;
@@ -312,7 +127,7 @@ function segmentPayload(segments: SemanticSegment[]): Array<{
   }));
 }
 
-function summarySystemPrompt(outputLanguage: OutputLanguage): string {
+export function summarySystemPrompt(outputLanguage: OutputLanguage): string {
   return [
     "You are a podcast intelligence analyst.",
     "Use only the supplied transcript segments.",
@@ -321,7 +136,7 @@ function summarySystemPrompt(outputLanguage: OutputLanguage): string {
   ].join(" ");
 }
 
-function insightSystemPrompt(outputLanguage: OutputLanguage): string {
+export function insightSystemPrompt(outputLanguage: OutputLanguage): string {
   return [
     "You are a podcast intelligence analyst.",
     "Extract watch-specific insights, not generic summary bullets.",
@@ -332,7 +147,7 @@ function insightSystemPrompt(outputLanguage: OutputLanguage): string {
   ].join(" ");
 }
 
-function intentAssistantSystemPrompt(outputLanguage: OutputLanguage): string {
+export function intentAssistantSystemPrompt(outputLanguage: OutputLanguage): string {
   return [
     "You are the intent and Q&A layer for Podcast Note, a podcast intelligence app.",
     "Classify the user's intent, extract actionable fields, and answer directly when no backend action is required.",
@@ -344,7 +159,7 @@ function intentAssistantSystemPrompt(outputLanguage: OutputLanguage): string {
   ].join(" ");
 }
 
-function normalizeIntentAssistantOutput(response: IntentAssistantOutput): IntentAssistantOutput {
+export function normalizeIntentAssistantOutput(response: IntentAssistantOutput): IntentAssistantOutput {
   const rawIntent = response.intent;
   const intent = intentValues.has(rawIntent) ? rawIntent : "unknown";
   const extracted = response.extracted && typeof response.extracted === "object" ? response.extracted : { keywords: [] };
@@ -460,14 +275,7 @@ function stringOrFallback(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
-function numberFromEnv(name: string, fallback: number): number {
-  const value = process.env[name];
-  if (!value) return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-const episodeSummarySchema = {
+export const episodeSummarySchema = {
   type: "object",
   additionalProperties: false,
   required: ["oneLiner", "overview", "chapters", "worthListening", "entities"],
@@ -526,7 +334,7 @@ const episodeSummarySchema = {
   }
 };
 
-const watchInsightsSchema = {
+export const watchInsightsSchema = {
   type: "object",
   additionalProperties: false,
   required: ["insights"],
@@ -576,7 +384,7 @@ const watchInsightsSchema = {
   }
 };
 
-const intentAssistantSchema = {
+export const intentAssistantSchema = {
   type: "object",
   additionalProperties: false,
   required: ["intent", "confidence", "reasoning", "answer", "extracted", "suggestedAction"],

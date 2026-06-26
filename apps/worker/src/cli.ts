@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { createCodexInsightProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
+import { createCommandLineInsightProvider, createVolcengineTranscriptProvider } from "../../../packages/ai/src/index.ts";
 import { connectorFor } from "../../../packages/connectors/src/index.ts";
 import type { Episode } from "../../../packages/core/src/types.ts";
 import { createRepositories, openPodcastNoteDb } from "../../../packages/db/src/index.ts";
@@ -164,7 +164,7 @@ if (command === "demo") {
     const results = await processSources({
       options: readProcessSourcesOptions(),
       transcriptProvider: volcengineTranscriptProviderOrFail(),
-      insightProvider: codexInsightProviderOrFail(),
+      insightProvider: commandLineInsightProviderOrFail(),
       repositories: createRepositories(db)
     });
     console.log(
@@ -351,7 +351,7 @@ if (command === "demo") {
       workspaceId: flagValue("--workspace-id"),
       now: flagValue("--now"),
       transcriptProvider: volcengineTranscriptProviderOrFail(),
-      insightProvider: codexInsightProviderOrFail(),
+      insightProvider: commandLineInsightProviderOrFail(),
       pollingEpisodeLimit: numberFlagValue("--polling-limit"),
       processingLimit: numberFlagValue("--processing-limit")
     });
@@ -510,9 +510,9 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function codexInsightProviderOrFail() {
+function commandLineInsightProviderOrFail() {
   try {
-    return createCodexInsightProvider();
+    return createCommandLineInsightProvider();
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }

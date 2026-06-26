@@ -9,7 +9,7 @@ The preview separates the two user-facing flows into different pages:
 - `/` processes one concrete podcast link as an immediate one-off task.
 - `/monitor` creates and manages monitoring tasks for a target site or platform, channel or host, optional comma-separated keywords, frequency, and backfill episode count.
 
-Both flows call the real worker pipeline via `processSourceInputs`. The Web preview does not use mock data or one-click demo generation. If Volcengine ASR or Codex insight extraction is not configured, the page returns a clear configuration error instead of pretending success.
+Both flows call the real worker pipeline via `processSourceInputs`. The Web preview does not use mock data or one-click demo generation. If Volcengine ASR or the local command-line LLM provider is not configured, the page returns a clear configuration error instead of pretending success.
 
 Monitoring is service-backed, not browser-backed. Clicking `开始监控` stores the Watch, starts an immediate background backfill run, and then the preview server's scheduler keeps checking enabled Watches while `scripts/podcast-note` is running. The scheduler wakes every 5 minutes by default and respects each Watch frequency, so a daily Watch is not processed every 5 minutes.
 

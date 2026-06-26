@@ -10,5 +10,5 @@ export type {
   WatchInsightInput
 } from "./types.ts";
 export { promptVersions } from "./types.ts";
-export { createCodexInsightProvider, createCodexIntentAssistantProvider } from "./codex-provider.ts";
+export { createCommandLineInsightProvider, createCommandLineIntentAssistantProvider } from "./command-line-provider.ts";
 export { createVolcengineTranscriptProvider } from "./volcengine-transcript-provider.ts";

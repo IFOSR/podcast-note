@@ -9,7 +9,7 @@ The current implementation includes:
 - Agent execution status in the Web UI so long-running transcription/analysis does not look stuck.
 - Episode reports with one-line summary, overview, listening recommendation, chapters, entities, insights, evidence excerpts, and timestamped audio playback.
 - Shared worker pipeline used by both CLI and Web preview.
-- Volcengine ASR transcription and Codex non-interactive summary/insight extraction.
+- Volcengine ASR transcription and local command-line LLM summary/insight extraction: DeepSeek TUI first, Kimi Code fallback.
 - SQLite persistence for workspaces, watches, sources, episodes, transcripts, summaries, insights, feedback, and processing runs.
 
 ## Documents
@@ -109,7 +109,7 @@ Team group delivery is intentionally not the primary path yet. The current produ
 
 ## Required Configuration
 
-Real Web processing requires Volcengine ASR credentials and Codex CLI access.
+Real Web processing requires Volcengine ASR credentials and at least one local command-line LLM: DeepSeek TUI is tried first, then Kimi Code is used as fallback.
 
 Natural-language Feishu commands can resolve Xiaoyuzhou podcast names through Xiaoyuzhou's authenticated search API when configured:
 
@@ -146,7 +146,20 @@ VOLCENGINE_ASR_TIMEOUT_MS=3600000
 
 `VOLCENGINE_ASR_TIMEOUT_MS` defaults to 60 minutes as the base wait limit. For longer episodes, the worker automatically waits for the episode duration plus one extra hour.
 
-Codex insight extraction uses the non-interactive provider from `packages/ai/src/codex-provider.ts`. Make sure `codex exec` works in your local environment before running real processing. Long transcripts can take several minutes to summarize; `CODEX_INSIGHT_TIMEOUT_MS` defaults to 30 minutes.
+Summary, insight, and natural-language intent extraction use the non-interactive provider from `packages/ai/src/command-line-provider.ts`. The provider calls local CLIs only:
+
+```bash
+DEEPSEEK_TUI_COMMAND=deepseek-tui
+DEEPSEEK_MODEL=deepseek-chat
+
+KIMI_CODE_COMMAND=kimi
+KIMI_MODEL=kimi-k2-0711-preview
+
+LOCAL_LLM_INSIGHT_TIMEOUT_MS=1800000
+LOCAL_LLM_INTENT_TIMEOUT_MS=120000
+```
+
+DeepSeek is invoked as `<DEEPSEEK_TUI_COMMAND> exec --model <model> <prompt>`. Kimi is invoked as `<KIMI_CODE_COMMAND> --quiet -m <model> -p <prompt>`. You can override models per purpose with `DEEPSEEK_INSIGHT_MODEL`, `DEEPSEEK_INTENT_MODEL`, `KIMI_INSIGHT_MODEL`, and `KIMI_INTENT_MODEL`. Long transcripts can take several minutes to summarize; `LOCAL_LLM_INSIGHT_TIMEOUT_MS` defaults to 30 minutes.
 
 Wiki proposal generation can use DeepSeek TUI instead of the deterministic proposal builder:
 
@@ -223,7 +236,7 @@ Then run:
 bun apps/worker/src/cli.ts process-sources
 ```
 
-The CLI and Web preview share the same worker implementation in `apps/worker/src/process-sources.ts`. The flow resolves public audio URLs, transcribes with Volcengine ASR, analyzes text with Codex, persists data to SQLite, and writes per-episode files under `outputs/<episode-slug>/`:
+The CLI and Web preview share the same worker implementation in `apps/worker/src/process-sources.ts`. The flow resolves public audio URLs, transcribes with Volcengine ASR, analyzes text with the local command-line LLM provider, persists data to SQLite, and writes per-episode files under `outputs/<episode-slug>/`:
 
 - `transcript.json`
 - `report.md`
@@ -279,6 +292,8 @@ bun run check:audio-formats
 bun run check:connectors
 bun run check:imports
 bun run check:preview-ui
+bun run check:command-line-llm
+bun run check:command-line-llm-e2e
 bun run check:start-script
 bun run check:web-m15
 bun run check:m1-run-once
@@ -310,6 +325,8 @@ Current key coverage:
 - `check:audio-formats`: direct audio extension support and Volcengine auth header precedence.
 - `check:connectors`: connector routing, Listen Notes no-key behavior, text query routing, and Ximalaya audio URL normalization.
 - `check:preview-ui`: simplified Web entry points, no mock fallback, Agent execution panel, button busy state, episode report rendering, audio verification, timestamp seek buttons, and feedback.
+- `check:command-line-llm`: fake DeepSeek TUI/Kimi Code CLIs verifying non-interactive invocation, JSON parsing, and fallback behavior.
+- `check:command-line-llm-e2e`: end-to-end worker processing through `processSourceInputs`, mock transcription, fake DeepSeek failure, Kimi fallback, persisted insight, and report export.
 - `check:start-script`: `start`, `status`, `restart`, `run-once`, and `stop` process-management behavior against an isolated preview server.
 - `check:web-m15`: local web session, workspace-scoped service helpers, inbox/detail hydration, feedback, and playback usage events.
 - `check:m1-run-once`: due Watch polling, RSS discovery, metadata relevance, queue processing, and insight publication in one deterministic worker call.
@@ -325,4 +342,4 @@ bun apps/worker/src/cli.ts demo
 bun apps/worker/src/cli.ts process-transcript evals/golden/ai-agent-sample-transcript.json
 ```
 
-`demo` uses the mock provider and is not used by the Web preview. The Web preview is intentionally configured to fail with a clear configuration error if real Volcengine/Codex processing is unavailable.
+`demo` uses the mock provider and is not used by the Web preview. The Web preview is intentionally configured to fail with a clear configuration error if real Volcengine/local command-line LLM processing is unavailable.

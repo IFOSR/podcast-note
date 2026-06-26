@@ -56,7 +56,7 @@ Karpathy 的 LLM Wiki 模式把知识库分成三层：
 LLM Wiki 的公开实现 `lucasastorian/llmwiki` 也强化了几个工程点：
 
 - 以普通 Markdown wiki 为核心，支持原始文件、wiki 页面和索引/缓存分层。
-- 通过 MCP 让 Claude/Codex 等 agent 读取、搜索、创建、编辑、追加、删除和 lint wiki。
+- 通过 MCP 让 Claude、本地命令行 LLM 等 agent 读取、搜索、创建、编辑、追加、删除和 lint wiki。
 - 支持 web app、Chrome clipper、local/hosted 两种模式。
 - 强调 cross-link、source citation、graph viewer、nightly routine、lint health check。
 

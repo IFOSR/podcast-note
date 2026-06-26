@@ -13,7 +13,7 @@ Transcript fixture -> semantic segments -> episode summary -> watch-specific ins
 - Root monorepo scaffold with Bun scripts.
 - `packages/core`: domain types, dedupe, metadata scoring, segmenting, groundedness, formatting.
 - `packages/connectors`: RSS, Listen Notes, Apple Podcasts, Spotify, YouTube, Xiaoyuzhou, and manual URL connectors.
-- `packages/ai`: provider interfaces, deterministic mock provider for demos, Codex non-interactive insight provider for real summary/insight extraction, and Volcengine ASR provider for transcription.
+- `packages/ai`: provider interfaces, deterministic mock provider for demos, local command-line LLM provider for real summary/insight extraction, and Volcengine ASR provider for transcription.
 - `packages/db`: initial SQLite schema, migration runner, and repositories.
 - `apps/worker`: CLI and M0 transcript processing pipeline.
 - `apps/web`: placeholder for M1 Web App.
