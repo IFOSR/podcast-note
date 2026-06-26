@@ -52,6 +52,15 @@ try {
   assertIncludes(wiki, "40 Claims/旧 Agent 结论.md", "冲突和衰退模块应展示影响页面。");
   assertIncludes(wiki, "批准", "待审更新需要提供批准动作入口。");
   assertIncludes(wiki, "拒绝", "待审更新需要提供拒绝动作入口。");
+  const approveResponse = postForm(`${url}/api/wiki/proposal-status`, {
+    proposalId: "wiki_prop_ui_conflict",
+    status: "approved"
+  });
+  if (!approveResponse.includes("/wiki")) throw new Error(`Approving a wiki proposal should redirect to /wiki, got ${approveResponse}`);
+  const approvedWiki = fetchText(`${url}/wiki`);
+  assertIncludes(approvedWiki, "发现冲突：旧 Agent 结论", "批准后的 proposal 仍应显示为待应用，不能从知识库页面消失。");
+  assertIncludes(approvedWiki, "已批准待应用", "批准后的 proposal 需要明确展示待应用状态。");
+  assertIncludes(approvedWiki, "应用已批准更新", "已批准 proposal 需要保留应用入口。");
 
   const api = JSON.parse(fetchText(`${url}/api/wiki/ask?question=${encodeURIComponent("量子烹饪有什么结论？")}`)) as { ok: boolean; insufficient: boolean; citations: unknown[] };
   if (!api.ok || !api.insufficient || api.citations.length !== 0) {
@@ -194,6 +203,17 @@ function waitForHealth(baseUrl: string): void {
 function fetchText(targetUrl: string): string {
   const result = spawnSync("curl", ["-fsS", targetUrl], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`GET ${targetUrl} failed: ${result.stderr || result.stdout}`);
+  return result.stdout;
+}
+
+function postForm(targetUrl: string, fields: Record<string, string>): string {
+  const args = ["-fsS", "-X", "POST"];
+  for (const [key, value] of Object.entries(fields)) {
+    args.push("--data-urlencode", `${key}=${value}`);
+  }
+  args.push("-D", "-", "-o", "/dev/null", targetUrl);
+  const result = spawnSync("curl", args, { encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`POST ${targetUrl} failed: ${result.stderr || result.stdout}`);
   return result.stdout;
 }
 

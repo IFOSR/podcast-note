@@ -1745,7 +1745,9 @@ function renderWikiPage(context: SessionContext, url: URL, notice: string | null
   });
   const pages = repos.listWikiPages({ workspaceId: context.workspace.id, vaultRoot, limit: 200 });
   const pending = repos.listWikiUpdateProposals({ workspaceId: context.workspace.id, status: "pending", limit: 50 });
-  const conflictProposals = pending.filter((proposal) => proposal.proposalType === "flag_conflict");
+  const approved = repos.listWikiUpdateProposals({ workspaceId: context.workspace.id, status: "approved", limit: 50 });
+  const actionableProposals = [...approved, ...pending];
+  const conflictProposals = actionableProposals.filter((proposal) => proposal.proposalType === "flag_conflict");
   const contestedPages = pages.filter((page) => page.status === "contested");
   const stalePages = pages.filter((page) => page.status === "stale" || page.status === "deprecated" || page.status === "contested");
   const question = url.searchParams.get("question")?.trim() ?? "";
@@ -1816,7 +1818,7 @@ function renderWikiPage(context: SessionContext, url: URL, notice: string | null
     <h2>知识库总览</h2>
     <div class="overview">
       ${metric("活跃知识页", feed.counts.activePages)}
-      ${metric("待审 proposal", feed.counts.pendingProposals)}
+      ${metric("待处理 proposal", actionableProposals.length)}
       ${metric("冲突提醒", feed.counts.conflicts)}
       ${metric("衰退知识", feed.counts.stalePages)}
       ${metric("已归档", feed.counts.archivedPages)}
@@ -1831,7 +1833,7 @@ function renderWikiPage(context: SessionContext, url: URL, notice: string | null
     <div class="card">
       <h2>待审更新</h2>
       <form method="post" action="/api/wiki/apply-proposals" class="actions"><input type="hidden" name="status" value="approved"/><button type="submit">应用已批准更新</button></form>
-      <div class="stack">${pending.length ? pending.slice(0, 8).map(renderPendingProposalCard).join("") : `<p class="muted">暂无待审更新。</p>`}</div>
+      <div class="stack">${actionableProposals.length ? actionableProposals.slice(0, 8).map(renderPendingProposalCard).join("") : `<p class="muted">暂无待审更新。</p>`}</div>
     </div>
     <div class="card">
       <h2>冲突提醒</h2>
@@ -1872,14 +1874,17 @@ function metric(label: string, value: number): string {
 }
 
 function renderPendingProposalCard(proposal: ReturnType<typeof repos.listWikiUpdateProposals>[number]): string {
+  const actions = proposal.status === "approved"
+    ? `<span class="pill">已批准待应用</span>`
+    : `<form method="post" action="/api/wiki/proposal-status"><input type="hidden" name="proposalId" value="${escapeHtml(proposal.id)}"/><input type="hidden" name="status" value="approved"/><button type="submit">批准</button></form>
+      <form method="post" action="/api/wiki/proposal-status"><input type="hidden" name="proposalId" value="${escapeHtml(proposal.id)}"/><input type="hidden" name="status" value="rejected"/><button class="secondary" type="submit">拒绝</button></form>`;
   return `<article class="item">
-    <span class="pill">${escapeHtml(proposal.proposalType)}</span>
+    <span class="pill">${escapeHtml(proposal.proposalType)}</span> <span class="pill">${escapeHtml(proposal.status)}</span>
     <h3>${escapeHtml(proposal.title)}</h3>
     <p class="muted small">${escapeHtml(proposal.targetPath)}</p>
     <p>${escapeHtml(proposal.rationale)}</p>
     <div class="actions">
-      <form method="post" action="/api/wiki/proposal-status"><input type="hidden" name="proposalId" value="${escapeHtml(proposal.id)}"/><input type="hidden" name="status" value="approved"/><button type="submit">批准</button></form>
-      <form method="post" action="/api/wiki/proposal-status"><input type="hidden" name="proposalId" value="${escapeHtml(proposal.id)}"/><input type="hidden" name="status" value="rejected"/><button class="secondary" type="submit">拒绝</button></form>
+      ${actions}
       <a class="button secondary" href="/wiki?question=${encodeURIComponent(proposal.title)}">追问</a>
     </div>
   </article>`;

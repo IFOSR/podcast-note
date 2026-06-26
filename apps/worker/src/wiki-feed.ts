@@ -43,13 +43,19 @@ export function buildWikiFeed(input: {
     status: "pending",
     limit: input.limit ?? 100
   });
+  const approved = input.repositories.listWikiUpdateProposals({
+    workspaceId: input.workspaceId,
+    status: "approved",
+    limit: input.limit ?? 100
+  });
+  const actionableProposals = [...approved, ...pending];
   const exports = input.repositories.listWikiExports({
     workspaceId: input.workspaceId,
     exportType: "wiki_page",
     limit: input.limit ?? 100
   });
   const feed: WikiFeedItem[] = [
-    ...pending.map(proposalToFeedItem),
+    ...actionableProposals.map(proposalToFeedItem),
     ...pages.filter((page) => page.status === "stale" || page.status === "deprecated").map(stalePageToFeedItem),
     ...pages.filter((page) => page.status === "archived").map(archivedPageToFeedItem),
     ...exports.map((item) => ({
@@ -65,8 +71,8 @@ export function buildWikiFeed(input: {
     counts: {
       pages: pages.length,
       activePages: pages.filter((page) => page.status === "active").length,
-      pendingProposals: pending.length,
-      conflicts: pending.filter((proposal) => proposal.proposalType === "flag_conflict").length + pages.filter((page) => page.status === "contested").length,
+      pendingProposals: actionableProposals.length,
+      conflicts: actionableProposals.filter((proposal) => proposal.proposalType === "flag_conflict").length + pages.filter((page) => page.status === "contested").length,
       stalePages: pages.filter((page) => page.status === "stale" || page.status === "deprecated").length,
       archivedPages: pages.filter((page) => page.status === "archived").length
     },
